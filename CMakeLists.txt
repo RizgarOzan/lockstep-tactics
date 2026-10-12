@@ -23,6 +23,17 @@ add_library(lockstep_core STATIC core/src/world.cpp core/src/replay.cpp)
 target_include_directories(lockstep_core PUBLIC core/include)
 target_link_libraries(lockstep_core PRIVATE lockstep_warnings)
 
+# Deliberately broken builds, to show the determinism checks catch what they
+# claim to. Never set for a real build. See docs/notes/06.
+set(LOCKSTEP_RISKY "" CACHE STRING "unordered|float: build a deliberately non-deterministic variant")
+if(LOCKSTEP_RISKY STREQUAL "unordered")
+  target_compile_definitions(lockstep_core PRIVATE LOCKSTEP_RISKY_UNORDERED)
+elseif(LOCKSTEP_RISKY STREQUAL "float")
+  target_compile_definitions(lockstep_core PRIVATE LOCKSTEP_RISKY_FLOAT)
+elseif(NOT LOCKSTEP_RISKY STREQUAL "")
+  message(FATAL_ERROR "LOCKSTEP_RISKY must be empty, unordered or float")
+endif()
+
 add_executable(replay tools/replay.cpp)
 target_link_libraries(replay PRIVATE lockstep_core lockstep_warnings)
 

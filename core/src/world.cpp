@@ -3,6 +3,13 @@
 #include <algorithm>
 #include <tuple>
 
+#if defined(LOCKSTEP_RISKY_FLOAT)
+#include <cmath>
+#endif
+#if defined(LOCKSTEP_RISKY_UNORDERED)
+#include <unordered_map>
+#endif
+
 #include "lockstep/fields.hpp"
 #include "lockstep/hash.hpp"
 
@@ -63,6 +70,28 @@ Unit* find_unit(std::vector<Unit>& units, std::uint32_t id) {
 
 int tile_of(Fixed v) { return v.raw >> Fixed::kFracBits; }
 
+#if defined(LOCKSTEP_RISKY_FLOAT)
+// RISKY BUILD ONLY (cmake -DLOCKSTEP_RISKY=float): moves along the straight
+// line with float maths and a square root, the way a game without lockstep
+// would. See docs/notes/06-breaking-it-on-purpose.md for what it does.
+Fixed to_fixed(float v) { return Fixed::from_raw(static_cast<std::int32_t>(std::lround(v * 65536.0f))); }
+float to_float(Fixed v) { return static_cast<float>(v.raw) / 65536.0f; }
+
+void walk(const Map& map, Unit& u, Fixed tx, Fixed ty) {
+    const float speed = to_float(stats(u.type).speed);
+    float dx = to_float(tx) - to_float(u.x);
+    float dy = to_float(ty) - to_float(u.y);
+    const float len = std::sqrt(dx * dx + dy * dy);
+    if (len > speed) {
+        dx = dx / len * speed;
+        dy = dy / len * speed;
+    }
+    const Fixed nx = to_fixed(to_float(u.x) + dx);
+    if (map.at(tile_of(nx), tile_of(u.y)) == Tile::Floor) u.x = nx;
+    const Fixed ny = to_fixed(to_float(u.y) + dy);
+    if (map.at(tile_of(u.x), tile_of(ny)) == Tile::Floor) u.y = ny;
+}
+#else
 // Moves `pos` towards `target` by at most `speed`.
 Fixed approach(Fixed pos, Fixed target, Fixed speed) {
     if (target > pos) return target - pos > speed ? pos + speed : target;
@@ -78,6 +107,7 @@ void walk(const Map& map, Unit& u, Fixed tx, Fixed ty) {
     const Fixed ny = approach(u.y, ty, speed);
     if (map.at(tile_of(u.x), tile_of(ny)) == Tile::Floor) u.y = ny;
 }
+#endif
 
 struct Hit {
     std::uint32_t target_id;
@@ -107,8 +137,19 @@ void step(World& world, std::span<const Command> commands) {
     }
 
     // 2. Movement and attacks, in unit id order. Attacks only record hits.
+    std::vector<Unit*> acting;
+#if defined(LOCKSTEP_RISKY_UNORDERED)
+    // RISKY BUILD ONLY (cmake -DLOCKSTEP_RISKY=unordered): units act in the
+    // iteration order of a hash map, which each standard library decides.
+    std::unordered_map<std::uint32_t, Unit*> by_id;
+    for (Unit& u : world.units) by_id.emplace(u.id, &u);
+    for (const auto& entry : by_id) acting.push_back(entry.second);
+#else
+    for (Unit& u : world.units) acting.push_back(&u);
+#endif
     std::vector<Hit> hits;
-    for (Unit& u : world.units) {
+    for (Unit* unit : acting) {
+        Unit& u = *unit;
         if (u.cooldown > 0) --u.cooldown;
         if (u.order == Order::Move) {
             walk(world.map, u, Fixed::from_int(u.target_x) + Fixed::from_ratio(1, 2),
