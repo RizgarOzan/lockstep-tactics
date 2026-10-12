@@ -59,6 +59,10 @@ shows on the other two compilers. Float was deterministic on all three targets
 until one compiler flag let gcc fuse multiply-adds; the fixed-point build
 under the same flag did not change.
 
+Write-up of these two experiments:
+[English](docs/blog/2026-10-12-worked-on-msvc-en.md) ·
+[Türkçe](docs/blog/2026-10-12-worked-on-msvc-tr.md).
+
 ## Why not …
 
 - **… just use `float` and test on one machine?** That is what most hobby
