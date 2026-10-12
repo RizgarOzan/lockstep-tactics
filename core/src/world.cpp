@@ -142,7 +142,7 @@ void step(World& world, std::span<const Command> commands) {
     //    "last order wins" would differ between machines.
     //    A tick rarely carries more than a handful of orders, so they are
     //    sorted in a buffer on the stack; only a flood of orders pays for a
-    //    heap allocation. Measured in docs/notes/10-benchmark.md.
+    //    heap allocation. Measured in docs/notes/11-benchmark.md.
     std::array<Command, kInlineCommands> inline_commands;
     std::vector<Command> spilled_commands;
     std::span<Command> sorted;

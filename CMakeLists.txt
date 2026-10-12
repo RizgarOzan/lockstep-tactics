@@ -19,7 +19,7 @@ if(MINGW)
   add_link_options(-static)
 endif()
 
-add_library(lockstep_core STATIC core/src/world.cpp core/src/replay.cpp core/src/ai.cpp)
+add_library(lockstep_core STATIC core/src/world.cpp core/src/replay.cpp core/src/ai.cpp core/src/net.cpp)
 target_include_directories(lockstep_core PUBLIC core/include)
 target_link_libraries(lockstep_core PRIVATE lockstep_warnings)
 
@@ -62,7 +62,7 @@ FetchContent_Declare(doctest
   SYSTEM)
 FetchContent_MakeAvailable(doctest)
 
-add_executable(core_tests tests/test_hash.cpp tests/test_world.cpp tests/test_fixed.cpp tests/test_rng.cpp tests/test_setup.cpp tests/test_combat.cpp tests/test_replay.cpp tests/test_player.cpp tests/test_ai.cpp)
+add_executable(core_tests tests/test_hash.cpp tests/test_world.cpp tests/test_fixed.cpp tests/test_rng.cpp tests/test_setup.cpp tests/test_combat.cpp tests/test_replay.cpp tests/test_player.cpp tests/test_ai.cpp tests/test_net.cpp)
 target_link_libraries(core_tests PRIVATE lockstep_core lockstep_warnings doctest::doctest_with_main)
 
 # The viewer pulls in raylib, so it is opt-in: the determinism CI never needs it.
@@ -83,7 +83,9 @@ if(LOCKSTEP_VIEWER)
   target_link_libraries(viewer PRIVATE lockstep_core lockstep_warnings raylib)
   if(EMSCRIPTEN)
     set_target_properties(viewer PROPERTIES OUTPUT_NAME index SUFFIX ".html")
+    # net_start/net_receive are called from the page's WebRTC code (tools/shell.html).
     target_link_options(viewer PRIVATE -sUSE_GLFW=3 -sALLOW_MEMORY_GROWTH=1
+      -sEXPORTED_FUNCTIONS=_main,_net_start,_net_receive,_net_closed -sEXPORTED_RUNTIME_METHODS=ccall
       "--shell-file=${CMAKE_CURRENT_SOURCE_DIR}/tools/shell.html")
     set_property(TARGET viewer APPEND PROPERTY LINK_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/tools/shell.html)
   endif()

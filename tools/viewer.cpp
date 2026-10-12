@@ -9,6 +9,11 @@
 //   next tick, so pausing to think is allowed.
 //   viewer --capture <dir> <seed> <frames> <fps> [ticks/s]   render frames to PNG, hidden window
 //
+// In the browser the page can also connect two viewers (tools/shell.html):
+// it calls net_start() once the WebRTC data channel is open, hands every
+// frame from the peer to net_receive(), and net_send() goes the other way.
+// The lockstep itself is lockstep::Lockstep (docs/notes/10-two-browsers.md).
+//
 // The viewer only reads the World; a player's click becomes an ordinary
 // Command through lockstep::click() (docs/notes/08-player.md). Hits, attacks
 // and deaths are worked out by comparing two consecutive ticks, and movement
@@ -19,10 +24,12 @@
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
+#include <optional>
 #include <string>
 #include <vector>
 
 #include "lockstep/ai.hpp"
+#include "lockstep/net.hpp"
 #include "lockstep/player.hpp"
 #include "lockstep/random_orders.hpp"
 #include "lockstep/replay.hpp"
@@ -39,6 +46,12 @@ EM_JS(void, download_text, (const char* text, const char* name), {
     a.click();
     URL.revokeObjectURL(a.href);
 });
+// A lockstep frame for the peer; the page sets window.lockstepNet on connect.
+EM_JS(void, net_send, (const char* frame), {
+    if (window.lockstepNet) window.lockstepNet.send(UTF8ToString(frame));
+});
+#else
+void net_send(const char*) {}
 #endif
 
 namespace {
@@ -73,6 +86,7 @@ const Color kMuted{132, 138, 152, 255};
 const Color kTeam[2] = {Color{86, 156, 230, 255}, Color{236, 128, 82, 255}};
 const Color kTeamDark[2] = {Color{34, 70, 116, 255}, Color{118, 52, 26, 255}};
 const char* kTeamName[2] = {"BLUE", "ORANGE"};
+const char* kTeamWord[2] = {"blue", "orange"};
 const char* kTypeName[3] = {"Soldier", "Archer", "Knight"};
 const char* kTypeGlyph[3] = {"S", "A", "K"};
 
@@ -102,10 +116,17 @@ struct Match {
     float ticks_per_second = 10.0f;
     float over_for = 0.0f;
     bool paused = false;
-    bool human = false;                      // Blue is played by clicks, Orange by the AI
-    std::uint32_t selected = 0;              // Blue's selected unit, 0 for none
-    std::vector<lockstep::Command> pending;  // Blue's orders for the next tick
+    bool human = false;                      // the local player is played by clicks, the rest by the AI
+    std::uint32_t local_player = 0;          // Blue, unless an online match says otherwise
+    std::uint32_t selected = 0;              // the local player's selected unit, 0 for none
+    std::vector<lockstep::Command> pending;  // the local player's orders for the next tick
     lockstep::Replay replay;                 // the match so far, as `lockstep record` would write it
+    // An online match: both players are people in two browsers, and a tick
+    // runs only when both sides' orders for it have arrived.
+    bool online = false;
+    std::optional<lockstep::Lockstep> sync;
+    bool waiting = false;    // this tick is due but the peer's frame is not in yet
+    bool peer_left = false;
 
     void start(std::uint64_t s) {
         seed = s;
@@ -140,24 +161,39 @@ struct Match {
     // replaces one still waiting, so what the player clicked last is what
     // the unit does.
     void board_click(int tx, int ty) {
-        const lockstep::Click c = lockstep::click(world, 0, selected, tx, ty);
+        const lockstep::Click c = lockstep::click(world, local_player, selected, tx, ty);
         selected = c.selected;
         if (!c.command) return;
         std::erase_if(pending, [&](const lockstep::Command& p) { return p.unit_id == c.command->unit_id; });
         pending.push_back(*c.command);
     }
 
-    void tick() {
-        before = world.units;
-        std::vector<lockstep::Command> commands = lockstep::match_orders(world, orders);
-        if (human) {
-            std::erase_if(commands, [](const lockstep::Command& c) { return c.player == 0; });
-            commands.insert(commands.end(), pending.begin(), pending.end());
-            pending.clear();
+    // Returns false when an online tick has to wait for the peer.
+    bool tick() {
+        std::vector<lockstep::Command> commands;
+        if (online) {
+            const std::string frame = sync->submit(pending);
+            if (!frame.empty()) {
+                pending.clear();
+                net_send(frame.c_str());
+            }
+            auto both = sync->next();
+            waiting = !both.has_value();
+            if (waiting) return false;
+            commands = std::move(*both);
+        } else {
+            commands = lockstep::match_orders(world, orders);
+            if (human) {
+                std::erase_if(commands, [&](const lockstep::Command& c) { return c.player == local_player; });
+                commands.insert(commands.end(), pending.begin(), pending.end());
+                pending.clear();
+            }
         }
+        before = world.units;
         lockstep::step(world, commands);
         replay.commands.push_back(std::move(commands));
         replay.hashes.push_back(lockstep::hash(world));
+        if (online) sync->ran(world.tick, replay.hashes.back());
         if (selected != 0 && !find(world.units, selected)) selected = 0;
         for (const auto& u : world.units) {
             const lockstep::Unit* p = find(before, u.id);
@@ -171,6 +207,7 @@ struct Match {
         for (const auto& p : before) {
             if (!find(world.units, p.id)) ghosts.push_back({p, kGhost});
         }
+        return true;
     }
 
     static Vector2 centre(const lockstep::Unit& u) {
@@ -185,7 +222,7 @@ struct Match {
         std::erase_if(flashes, [](const Flash& f) { return f.left <= 0; });
         std::erase_if(shots, [](const Shot& s) { return s.left <= 0; });
         std::erase_if(ghosts, [](const Ghost& g) { return g.left <= 0; });
-        if (paused) return;
+        if (paused || peer_left) return;
         if (over()) {
             over_for += dt;
             // A watched match moves on by itself; a played one waits for R or N.
@@ -193,9 +230,12 @@ struct Match {
             return;
         }
         since_tick += dt;
+        // After a stall the ticks that are due run back to back, but no more
+        // than half a second of them, so a long wait does not end in a blur.
+        if (since_tick > 0.5f) since_tick = 0.5f;
         while (since_tick >= 1.0f / ticks_per_second && !over()) {
+            if (!tick()) break;
             since_tick -= 1.0f / ticks_per_second;
-            tick();
         }
     }
 };
@@ -316,7 +356,12 @@ void draw_player_layer(Vector2 mouse) {
         }
     }
     if (!match.over()) {
-        const char* hint = sel ? "click a tile to move, an orange unit to attack" : "click a blue unit, or its card";
+        char hint[96];
+        if (sel) {
+            std::snprintf(hint, sizeof hint, "click a tile to move, an %s unit to attack", kTeamWord[1 - match.local_player]);
+        } else {
+            std::snprintf(hint, sizeof hint, "click a %s unit, or its card", kTeamWord[match.local_player]);
+        }
         DrawRectangle(8, kTop + 8, MeasureText(hint, 10) + 16, 20, Fade(BLACK, 0.6f));
         text(hint, 16, kTop + 13, 10, kText);
     }
@@ -354,7 +399,20 @@ void draw_top_bar() {
     const float progress = static_cast<float>(match.world.tick) / kMatchTicks;
     DrawRectangle(300, 24, 220, 4, Color{40, 43, 52, 255});
     DrawRectangle(300, 24, static_cast<int>(220 * progress), 4, Color{150, 160, 180, 255});
-    if (match.paused) text_centre("PAUSED", 410, 34, 10, kMuted);
+    if (match.online) {
+        std::snprintf(line, sizeof line, "online  -  you are %s  -  %u ticks ahead", kTeamName[match.local_player],
+                      match.sync->delay());
+        text_centre(line, 410, 34, 10, kTeam[match.local_player]);
+        if (match.sync->desync()) {
+            std::snprintf(line, sizeof line, "DESYNC AT TICK %u  -  save the replay", *match.sync->desync());
+            DrawRectangle(kBoard / 2 - 150, kTop + 6, 300, 20, Color{120, 30, 30, 230});
+            text_centre(line, kBoard / 2, kTop + 11, 10, RAYWHITE);
+        } else if (match.peer_left) {
+            text_centre("the other player left", kBoard / 2, kTop + 11, 10, kMuted);
+        } else if (match.waiting) {
+            text_centre("waiting for the other player", kBoard / 2, kTop + 11, 10, kMuted);
+        }
+    } else if (match.paused) text_centre("PAUSED", 410, 34, 10, kMuted);
     else if (match.human) text_centre("you are Blue", 410, 34, 10, kTeam[0]);
     else text_centre("random vs AI", 410, 34, 10, kMuted);
 }
@@ -384,7 +442,7 @@ void draw_board() {
 // whether it was clicked.
 bool unit_card(const lockstep::Unit& u, int x, int y, bool selected, bool clicked, Vector2 mouse) {
     const Rectangle r{static_cast<float>(x), static_cast<float>(y), kPanel - 32, 44};
-    const bool hot = match.human && u.owner == 0 && CheckCollisionPointRec(mouse, r);
+    const bool hot = match.human && u.owner == match.local_player && CheckCollisionPointRec(mouse, r);
     DrawRectangleRounded(r, 0.2f, 4, hot ? kCardHot : kCard);
     if (selected) DrawRectangleRoundedLinesEx(r, 0.2f, 4, 2, RAYWHITE);
     DrawRectangle(x, y + 6, 3, 32, kTeam[u.owner]);
@@ -450,17 +508,23 @@ bool draw_panel(bool clicked, Vector2 mouse) {
         return Rectangle{static_cast<float>(x) + static_cast<float>(col) * (bw + 8), static_cast<float>(y + row * 40), bw, 32};
     };
     const Button pause{at(0, 0), match.paused ? "play" : "pause"};
-    const Button restart{at(1, 0), "restart"};
-    const Button next{at(0, 1), "next seed"};
-    const Button faster{at(1, 1), speed};
-    const Button mode{at(0, 2), match.human ? "watch" : "play Blue", !match.human};
-    const Button save{at(1, 2), "save"};
+    const Button save{at(1, 0), "save"};
     if (button(pause, clicked, mouse)) match.paused = !match.paused;
-    if (button(restart, clicked, mouse)) match.start(match.seed);
-    if (button(next, clicked, mouse)) match.start(match.seed + 1);
-    if (button(faster, clicked, mouse)) match.ticks_per_second = match.ticks_per_second >= 40.0f ? 5.0f : match.ticks_per_second * 2.0f;
-    if (button(mode, clicked, mouse)) match.human = !match.human;
     if (button(save, clicked, mouse)) save_replay();
+    if (match.online) {
+        // Seed, speed and sides are fixed by the connection; only pause and save remain.
+        text(match.peer_left ? "the other player left; reload to play again" : "online match: seed and speed are shared", x,
+             y + 46, 10, kMuted);
+    } else {
+        const Button restart{at(0, 1), "restart"};
+        const Button next{at(1, 1), "next seed"};
+        const Button faster{at(0, 2), speed};
+        const Button mode{at(1, 2), match.human ? "watch" : "play Blue", !match.human};
+        if (button(restart, clicked, mouse)) match.start(match.seed);
+        if (button(next, clicked, mouse)) match.start(match.seed + 1);
+        if (button(faster, clicked, mouse)) match.ticks_per_second = match.ticks_per_second >= 40.0f ? 5.0f : match.ticks_per_second * 2.0f;
+        if (button(mode, clicked, mouse)) match.human = !match.human;
+    }
     y += 3 * 40 + 6;
     text("Soldier beats Archer beats Knight", x, y, 10, kMuted);
     text("beats Soldier. Archers shoot 4 tiles.", x, y + 14, 10, kMuted);
@@ -501,7 +565,9 @@ void draw(bool clicked, Vector2 mouse) {
         text_centre(line, kBoard / 2, kTop + 294, 40, c);
         char sub[64];
         std::snprintf(sub, sizeof sub, "tick %u  -  %s", match.world.tick,
-                      match.human ? "restart or next seed to play again" : "next match in a moment");
+                      match.online ? "reload the page to play again"
+                      : match.human ? "restart or next seed to play again"
+                                    : "next match in a moment");
         text_centre(sub, kBoard / 2, kTop + 344, 10, kMuted);
     }
     draw_top_bar();
@@ -513,11 +579,13 @@ void draw(bool clicked, Vector2 mouse) {
 
 void frame() {
     if (IsKeyPressed(KEY_SPACE)) match.paused = !match.paused;
-    if (IsKeyPressed(KEY_N)) match.start(match.seed + 1);
-    if (IsKeyPressed(KEY_R)) match.start(match.seed);
-    if (IsKeyPressed(KEY_UP) && match.ticks_per_second < 40.0f) match.ticks_per_second *= 2.0f;
-    if (IsKeyPressed(KEY_DOWN) && match.ticks_per_second > 5.0f) match.ticks_per_second /= 2.0f;
-    if (IsKeyPressed(KEY_P)) match.human = !match.human;
+    if (!match.online) {
+        if (IsKeyPressed(KEY_N)) match.start(match.seed + 1);
+        if (IsKeyPressed(KEY_R)) match.start(match.seed);
+        if (IsKeyPressed(KEY_UP) && match.ticks_per_second < 40.0f) match.ticks_per_second *= 2.0f;
+        if (IsKeyPressed(KEY_DOWN) && match.ticks_per_second > 5.0f) match.ticks_per_second /= 2.0f;
+        if (IsKeyPressed(KEY_P)) match.human = !match.human;
+    }
     if (IsKeyPressed(KEY_S)) save_replay();
     if (IsMouseButtonPressed(MOUSE_BUTTON_RIGHT)) match.selected = 0;
     match.update(GetFrameTime());
@@ -563,6 +631,26 @@ int capture(const char* dir, std::uint64_t seed, int frames, int fps, float tick
 }
 
 }  // namespace
+
+#if defined(__EMSCRIPTEN__)
+extern "C" {
+// The page calls these once its WebRTC data channel is up (tools/shell.html).
+EMSCRIPTEN_KEEPALIVE void net_start(int player, unsigned seed, unsigned delay) {
+    match.start(seed);
+    match.human = true;
+    match.online = true;
+    match.peer_left = false;
+    match.local_player = static_cast<std::uint32_t>(player);
+    match.sync.emplace(match.local_player, delay);
+    match.ticks_per_second = 10.0f;
+    match.paused = false;
+}
+EMSCRIPTEN_KEEPALIVE void net_receive(const char* frame) {
+    if (match.sync) match.sync->receive(frame);
+}
+EMSCRIPTEN_KEEPALIVE void net_closed() { match.peer_left = true; }
+}
+#endif
 
 int main(int argc, char** argv) {
     if ((argc == 6 || argc == 7) && std::string(argv[1]) == "--capture") {

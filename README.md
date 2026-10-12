@@ -3,9 +3,10 @@
 [![determinism](https://github.com/RizgarOzan/lockstep-tactics/actions/workflows/determinism.yml/badge.svg)](https://github.com/RizgarOzan/lockstep-tactics/actions/workflows/determinism.yml)
 
 **[▶ Play it in the browser](https://rizgarozan.github.io/lockstep-tactics/)**: the
-simulation compiled to WebAssembly. Watch the AI beat a random player, or take
-Blue yourself, with the live state hash on screen and a *save* button that
-writes a replay any machine can verify.
+simulation compiled to WebAssembly. Watch the AI beat a random player, take
+Blue yourself, or open a room and play a friend in another browser, with the
+live state hash on screen and a *save* button that writes a replay any
+machine can verify.
 
 <p align="center">
   <img src="docs/media/match.gif" width="720" alt="Seed 1: random Blue against the AI. Orange focuses one blue unit at a time, the unit cards on the right show health and what each unit is doing, and Orange wins at tick 68; the state hash in the top right updates every tick">
@@ -23,7 +24,9 @@ overflow.
 > Knight each; move and attack orders, hit rolls, cooldowns, simultaneous
 > damage, and a matchup triangle (Soldier beats Archer beats Knight beats
 > Soldier). A deterministic AI plays Orange and beats the random player in
-> 978 of 1,000 matches; you can play Blue against it in the browser. In 1,000
+> 978 of 1,000 matches; you can play Blue against it in the browser, or play
+> another person: two browsers run the match in lockstep over a WebRTC data
+> channel, three ticks ahead, comparing hashes as they go. In 1,000
 > seeded matches of 600 ticks, MSVC x64, Apple clang arm64 and WebAssembly
 > reach the same final hash in every one (CI checks this on each push). A
 > replay recorded under MSVC also verifies tick by tick under WebAssembly,
@@ -50,6 +53,7 @@ catches it.
 | Float only where nothing reads it back (rendering) | smooth motion without touching the simulated state | [07](docs/notes/07-viewer.md) |
 | A click becomes a `Command` for the next tick | input enters the state only through `step()` | [08](docs/notes/08-player.md) |
 | The AI uses integers only and emits only changes | its commands are in the replay too | [09](docs/notes/09-ai-and-matchups.md) |
+| Online, a tick runs when both sides' orders for it are in | orders scheduled three ticks ahead; frames carry the last hash | [10](docs/notes/10-two-browsers.md) |
 
 Three of these rules were also broken in a whole build (`-DLOCKSTEP_RISKY=unordered|float|size_t`,
 [note 06](docs/notes/06-breaking-it-on-purpose.md)), 1,000 matches each:
@@ -102,7 +106,7 @@ measured by `bench`, which times `step()` on recorded orders and leaves the
 input generator out. It was 1.8–2.7× slower until the three per-tick heap
 allocations were removed, and until then WebAssembly was the fastest of the
 three builds, most likely because its allocator is single-threaded.
-Method, numbers and the fix: [note 10](docs/notes/10-benchmark.md). The
+Method, numbers and the fix: [note 11](docs/notes/11-benchmark.md). The
 benchmark does not run in CI on purpose; shared runners are not a clock.
 
 ## How the check works
@@ -165,6 +169,14 @@ the speed, P switches between watching and playing Blue, S saves the replay
 (a download in the browser). Playing: click a unit or its card, then a tile
 or an enemy.
 
+To play a friend, one browser presses *Create a room* and reads out the
+six-letter code, the other types it and presses *Join*. The handshake goes
+through a public [ntfy.sh](https://ntfy.sh) topic (`?relay=` points the page
+at another ntfy server); after that the two browsers exchange lockstep
+frames directly over WebRTC ([note 10](docs/notes/10-two-browsers.md)). The
+same `lockstep::Lockstep` class, with no sockets in it, is what
+`tests/test_net.cpp` runs two of against each other.
+
 ## Roadmap
 
 1. ~~One map, three unit types, fixed-point movement and combat, fixed timestep.~~ Done.
@@ -176,8 +188,9 @@ or an enemy.
 5. ~~raylib rendering, playable in the browser.~~ Done ([note 07](docs/notes/07-viewer.md)).
 6. ~~Touch controls for the browser page, and a real player instead of random orders.~~ Done ([note 08](docs/notes/08-player.md)).
 7. ~~An opponent worth playing, and a reason to pick one unit over another.~~ Done: the AI and the matchup triangle ([note 09](docs/notes/09-ai-and-matchups.md)).
-8. A second human: two browsers exchanging commands over a relay, with the same replay format as proof.
-9. ~~A benchmark of the step alone, and the first optimisation it pointed at.~~ Done ([note 10](docs/notes/10-benchmark.md)).
+8. ~~A second human: two browsers exchanging commands over a relay, with the same replay format as proof.~~ Done ([note 10](docs/notes/10-two-browsers.md)).
+9. Rollback on top of the same frames, so an order lands on the tick it was given instead of three later.
+10. ~~A benchmark of the step alone, and the first optimisation it pointed at.~~ Done ([note 11](docs/notes/11-benchmark.md)).
 
 ## Contributing
 
@@ -189,7 +202,9 @@ Good first changes, each small enough for one pull request:
 - a fourth CI target (gcc on Linux arm64, or MSVC x86) in `determinism.yml`;
 - a stronger AI in `core/src/ai.cpp` that still uses integers only; the
   arena number in the README should move and `ctest` must stay green;
-- a third unit type, with its row in the matchup table and in the tests.
+- a third unit type, with its row in the matchup table and in the tests;
+- a TURN fallback or a different signalling relay for the online mode, kept
+  behind the same `?relay=` parameter.
 
 The rule for every change: `ctest` green under at least two compilers, and
 `replay 1000 600` identical between them. If a change is meant to alter the

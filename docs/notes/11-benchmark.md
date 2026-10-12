@@ -1,4 +1,4 @@
-# 10 — How fast is a tick, and the three allocations that were most of it
+# 11 — How fast is a tick, and the three allocations that were most of it
 
 **What:** a `bench` tool that times `step()` alone, and the one change it
 led to: the per-tick heap allocations are gone. Every number is from this
