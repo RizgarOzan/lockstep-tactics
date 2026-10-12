@@ -35,6 +35,11 @@ struct UnitStats {
 
 const UnitStats& stats(UnitType type);
 
+// Damage one hit does, after the matchup: Soldiers cut down Archers, Archers
+// pick off Knights, Knights crush Soldiers; every other pair is the plain
+// `damage` from stats().
+std::int32_t damage(UnitType attacker, UnitType target);
+
 enum class Order : std::uint8_t { None = 0, Move = 1, Attack = 2 };
 
 struct Unit {

@@ -19,19 +19,21 @@ if(MINGW)
   add_link_options(-static)
 endif()
 
-add_library(lockstep_core STATIC core/src/world.cpp core/src/replay.cpp)
+add_library(lockstep_core STATIC core/src/world.cpp core/src/replay.cpp core/src/ai.cpp)
 target_include_directories(lockstep_core PUBLIC core/include)
 target_link_libraries(lockstep_core PRIVATE lockstep_warnings)
 
 # Deliberately broken builds, to show the determinism checks catch what they
 # claim to. Never set for a real build. See docs/notes/06.
-set(LOCKSTEP_RISKY "" CACHE STRING "unordered|float: build a deliberately non-deterministic variant")
+set(LOCKSTEP_RISKY "" CACHE STRING "unordered|float|size_t: build a deliberately non-deterministic variant")
 if(LOCKSTEP_RISKY STREQUAL "unordered")
   target_compile_definitions(lockstep_core PRIVATE LOCKSTEP_RISKY_UNORDERED)
 elseif(LOCKSTEP_RISKY STREQUAL "float")
   target_compile_definitions(lockstep_core PRIVATE LOCKSTEP_RISKY_FLOAT)
+elseif(LOCKSTEP_RISKY STREQUAL "size_t")
+  target_compile_definitions(lockstep_core PRIVATE LOCKSTEP_RISKY_SIZE_T)
 elseif(NOT LOCKSTEP_RISKY STREQUAL "")
-  message(FATAL_ERROR "LOCKSTEP_RISKY must be empty, unordered or float")
+  message(FATAL_ERROR "LOCKSTEP_RISKY must be empty, unordered, float or size_t")
 endif()
 
 add_executable(replay tools/replay.cpp)
@@ -39,6 +41,8 @@ target_link_libraries(replay PRIVATE lockstep_core lockstep_warnings)
 
 add_executable(bench tools/bench.cpp)
 target_link_libraries(bench PRIVATE lockstep_core lockstep_warnings)
+add_executable(arena tools/arena.cpp)
+target_link_libraries(arena PRIVATE lockstep_core lockstep_warnings)
 
 add_executable(lockstep tools/lockstep.cpp)
 target_link_libraries(lockstep PRIVATE lockstep_core lockstep_warnings)
@@ -58,7 +62,7 @@ FetchContent_Declare(doctest
   SYSTEM)
 FetchContent_MakeAvailable(doctest)
 
-add_executable(core_tests tests/test_hash.cpp tests/test_world.cpp tests/test_fixed.cpp tests/test_rng.cpp tests/test_setup.cpp tests/test_combat.cpp tests/test_replay.cpp)
+add_executable(core_tests tests/test_hash.cpp tests/test_world.cpp tests/test_fixed.cpp tests/test_rng.cpp tests/test_setup.cpp tests/test_combat.cpp tests/test_replay.cpp tests/test_player.cpp tests/test_ai.cpp)
 target_link_libraries(core_tests PRIVATE lockstep_core lockstep_warnings doctest::doctest_with_main)
 
 # The viewer pulls in raylib, so it is opt-in: the determinism CI never needs it.

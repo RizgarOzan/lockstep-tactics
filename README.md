@@ -2,29 +2,33 @@
 
 [![determinism](https://github.com/RizgarOzan/lockstep-tactics/actions/workflows/determinism.yml/badge.svg)](https://github.com/RizgarOzan/lockstep-tactics/actions/workflows/determinism.yml)
 
-**[▶ Watch a match in the browser](https://rizgarozan.github.io/lockstep-tactics/)**: the
-simulation compiled to WebAssembly, with the live state hash on screen.
+**[▶ Play it in the browser](https://rizgarozan.github.io/lockstep-tactics/)**: the
+simulation compiled to WebAssembly. Watch the AI beat a random player, or take
+Blue yourself, with the live state hash on screen and a *save* button that
+writes a replay any machine can verify.
 
 <p align="center">
-  <img src="docs/media/match.gif" width="420" alt="Seed 1: blue (circle soldier, triangle archer, square knight) and orange units walk, trade hits with flashes and attack lines, and blue wins at tick 139; the state hash updates in the corner every tick">
+  <img src="docs/media/match.gif" width="720" alt="Seed 1: random Blue against the AI. Orange focuses one blue unit at a time, the unit cards on the right show health and what each unit is doing, and Orange wins at tick 68; the state hash in the top right updates every tick">
 </p>
-<p align="center"><sub>Seed 1 at 2× speed, rendered headless by <code>viewer --capture</code>.</sub></p>
+<p align="center"><sub>Seed 1 at 2× speed, random Blue against the AI, rendered headless by <code>viewer --capture</code>.</sub></p>
 
 A small tick-based tactics simulation in C++20, written to be **bit-identical
 across compilers**: the same inputs must give the same state hash under MSVC
-x64 and under WebAssembly, on every tick. That property is what lockstep
+x64, Apple clang on arm64 and WebAssembly, on every tick. That property is what lockstep
 multiplayer and replays stand on, and it breaks in quiet ways — floats,
 unordered containers, `std::sort` on equal keys, `size_t` width, signed
 overflow.
 
-> **Status: the simulation plays.** Two players, a 16×16 map, a Soldier, an
-> Archer and a Knight each; move and attack orders, hit rolls, cooldowns,
-> simultaneous damage. In 1,000 random matches of 600 ticks, MSVC x64 and
-> WebAssembly reach the same final hash in every one (CI checks this on each
-> push). A replay recorded under MSVC also verifies tick by tick under
-> WebAssembly, and when two runs disagree the `lockstep` tool names the first
-> tick and the field: it located 100 of 100 injected desyncs exactly.
-> A raylib viewer plays matches natively and [in the browser](https://rizgarozan.github.io/lockstep-tactics/).
+> **Status: playable.** Two players, a 16×16 map, a Soldier, an Archer and a
+> Knight each; move and attack orders, hit rolls, cooldowns, simultaneous
+> damage, and a matchup triangle (Soldier beats Archer beats Knight beats
+> Soldier). A deterministic AI plays Orange and beats the random player in
+> 978 of 1,000 matches; you can play Blue against it in the browser. In 1,000
+> seeded matches of 600 ticks, MSVC x64, Apple clang arm64 and WebAssembly
+> reach the same final hash in every one (CI checks this on each push). A
+> replay recorded under MSVC also verifies tick by tick under WebAssembly,
+> and when two runs disagree the `lockstep` tool names the first tick and
+> the field: it located 100 of 100 injected desyncs exactly.
 
 ## What makes it deterministic
 
@@ -44,8 +48,10 @@ catches it.
 | The hash test edits each field in turn | a field missing from the hash is an invisible desync | [03](docs/notes/03-map-and-units.md) |
 | Hash, dump and diff walk one field list | a debug tool that reads other fields than the hash misses desyncs | [05](docs/notes/05-replays-and-the-bisector.md) |
 | Float only where nothing reads it back (rendering) | smooth motion without touching the simulated state | [07](docs/notes/07-viewer.md) |
+| A click becomes a `Command` for the next tick | input enters the state only through `step()` | [08](docs/notes/08-player.md) |
+| The AI uses integers only and emits only changes | its commands are in the replay too | [09](docs/notes/09-ai-and-matchups.md) |
 
-Two of these rules were also broken in a whole build (`-DLOCKSTEP_RISKY=unordered|float`,
+Three of these rules were also broken in a whole build (`-DLOCKSTEP_RISKY=unordered|float|size_t`,
 [note 06](docs/notes/06-breaking-it-on-purpose.md)), 1,000 matches each:
 
 | Broken build | MSVC | gcc | WebAssembly |
@@ -53,11 +59,13 @@ Two of these rules were also broken in a whole build (`-DLOCKSTEP_RISKY=unordere
 | units act in `unordered_map` order | 0 differ | 881 differ | 860 differ |
 | movement in `float` | same on all three | | |
 | `float` + gcc `-mfma -ffp-contract=fast` | | 12 differ | |
+| a `size_t` in the state hash | same as gcc | | 1000 differ, from tick 1 |
 
 MSVC's `unordered_map` happened to iterate in id order here, so that bug only
 shows on the other two compilers. Float was deterministic on all three targets
 until one compiler flag let gcc fuse multiply-adds; the fixed-point build
-under the same flag did not change.
+under the same flag did not change. A `size_t` in the hash is invisible
+between two 64-bit compilers and breaks every single tick against wasm32.
 
 Write-up of these two experiments:
 [English](docs/blog/2026-10-12-worked-on-msvc-en.md) ·
@@ -71,6 +79,12 @@ Write-up of these two experiments:
   compilers. The point is not that fixed-point is clever; it is that the
   claim "bit-identical" is checked on every push, across compilers, with
   replays that any machine can verify.
+- **… a smarter AI?** The one here (note 09) is a scoring rule in integers:
+  closest enemy, minus a bonus for a winning matchup, plus the enemy's
+  remaining health, and Archers step back from melee. It wins 978 of 1,000
+  against random orders and loses to a person who reads the triangle. Its
+  job is to make the demo a game and to put a second order source into the
+  replays; search and pathfinding would not change what the repo measures.
 - **… an engine's netcode (Unity Netcode, Godot, Photon)?** Those give you
   state synchronisation; they do not give you a simulation that is the same
   everywhere, and they cannot be dropped into a browser tab. This is the
@@ -83,26 +97,28 @@ Write-up of these two experiments:
 
 ## How fast
 
-A tick costs 60–90 ns on this laptop, gcc, MSVC and WebAssembly within 30 ns
-of each other, measured by `bench`, which times `step()` on recorded orders
-and leaves the input generator out. It was 2–3× slower until the three
-per-tick heap allocations were removed, and WebAssembly was the fastest of
-the three builds until then, because its allocator is single-threaded.
-Method, numbers and the fix: [note 08](docs/notes/08-benchmark.md). The
+A tick costs 64–89 ns on this laptop across gcc, MSVC and WebAssembly,
+measured by `bench`, which times `step()` on recorded orders and leaves the
+input generator out. It was 1.8–2.7× slower until the three per-tick heap
+allocations were removed, and until then WebAssembly was the fastest of the
+three builds, most likely because its allocator is single-threaded.
+Method, numbers and the fix: [note 10](docs/notes/10-benchmark.md). The
 benchmark does not run in CI on purpose; shared runners are not a clock.
 
 ## How the check works
 
 ```
-tools/replay.cpp  ── seed → random orders → step() × 600 → hash()   (one line per seed)
+tools/replay.cpp  ── seed → random Blue vs AI Orange → step() × 600 → hash()   (one line per seed)
         │
-        ├── windows-latest, MSVC x64   → msvc.txt
-        └── ubuntu-latest, Emscripten  → wasm.txt (run under Node)
-                                            │
-                              compare job: diff msvc.txt wasm.txt
+        ├── windows-latest, MSVC x64          → msvc.txt
+        ├── macos-latest, Apple clang arm64   → clang.txt
+        └── ubuntu-latest, Emscripten         → wasm.txt (run under Node)
+                                                   │
+                              compare job: diff msvc.txt clang.txt; diff msvc.txt wasm.txt
 
 tools/lockstep.cpp ── MSVC job: record a 600-tick replay (commands + hash per tick)
                       wasm job: verify it, failing on the first tick that differs
+tools/arena.cpp    ── MSVC job: 1,000 matches, prints who won
 ```
 
 Finding a desync by hand:
@@ -124,7 +140,8 @@ Needs CMake ≥ 3.25 and a C++20 compiler; doctest is fetched by CMake.
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
 cmake --build build
 ctest --test-dir build
-build/replay 1000 600
+build/replay 1000 600     # one hash per seed, what CI diffs between compilers
+build/arena 1000 600      # AI vs random: who won
 build/bench 200 600 50    # ns per tick: min, median, max over 50 repeats
 ```
 
@@ -143,6 +160,11 @@ cmake -S . -B build-viewer -DLOCKSTEP_VIEWER=ON && cmake --build build-viewer --
 emcmake cmake -S . -B build-web -DLOCKSTEP_VIEWER=ON && cmake --build build-web --target viewer   # index.html
 ```
 
+In the viewer: space pauses, N is the next seed, R restarts, up/down change
+the speed, P switches between watching and playing Blue, S saves the replay
+(a download in the browser). Playing: click a unit or its card, then a tile
+or an enemy.
+
 ## Roadmap
 
 1. ~~One map, three unit types, fixed-point movement and combat, fixed timestep.~~ Done.
@@ -152,19 +174,22 @@ emcmake cmake -S . -B build-web -DLOCKSTEP_VIEWER=ON && cmake --build build-web 
    Done for the simulation ([note 06](docs/notes/06-breaking-it-on-purpose.md)); render-side
    float interpolation comes with rendering.
 5. ~~raylib rendering, playable in the browser.~~ Done ([note 07](docs/notes/07-viewer.md)).
-6. ~~Touch controls for the browser page~~ (the HUD buttons take a finger as well as a mouse) and a real player instead of random orders.
-7. ~~A benchmark of the step alone, and the first optimisation it pointed at.~~ Done ([note 08](docs/notes/08-benchmark.md)).
+6. ~~Touch controls for the browser page, and a real player instead of random orders.~~ Done ([note 08](docs/notes/08-player.md)).
+7. ~~An opponent worth playing, and a reason to pick one unit over another.~~ Done: the AI and the matchup triangle ([note 09](docs/notes/09-ai-and-matchups.md)).
+8. A second human: two browsers exchanging commands over a relay, with the same replay format as proof.
+9. ~~A benchmark of the step alone, and the first optimisation it pointed at.~~ Done ([note 10](docs/notes/10-benchmark.md)).
 
 ## Contributing
 
 Good first changes, each small enough for one pull request:
 
 - a new deliberately broken build under `LOCKSTEP_RISKY` (a `std::sort` on
-  equal keys, a `size_t` in the hash, signed overflow) with its measured
-  numbers added to the table above;
-- a third CI compiler (clang on macOS) in `determinism.yml`;
-- a real player in the browser viewer: pick a unit, click a tile or an enemy,
-  and send a `Command`; replays must keep working unchanged.
+  equal keys, signed overflow, a `double` in the AI's scoring) with its
+  measured numbers added to the table above;
+- a fourth CI target (gcc on Linux arm64, or MSVC x86) in `determinism.yml`;
+- a stronger AI in `core/src/ai.cpp` that still uses integers only; the
+  arena number in the README should move and `ctest` must stay green;
+- a third unit type, with its row in the matchup table and in the tests.
 
 The rule for every change: `ctest` green under at least two compilers, and
 `replay 1000 600` identical between them. If a change is meant to alter the

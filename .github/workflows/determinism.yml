@@ -14,12 +14,28 @@ jobs:
       - run: ctest --test-dir build -C Release --output-on-failure
       - run: build\Release\replay.exe 1000 600 > msvc.txt
       - run: build\Release\lockstep.exe record 7 600 msvc-replay.txt
+      - run: build\Release\arena.exe 1000 600
       - uses: actions/upload-artifact@v4
         with:
           name: msvc
           path: |
             msvc.txt
             msvc-replay.txt
+
+  # Apple clang on arm64: a third compiler, a third standard library and a
+  # second CPU architecture, all from one job.
+  clang:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+      - run: cmake --build build
+      - run: ctest --test-dir build --output-on-failure
+      - run: uname -m && build/replay 1000 600 > clang.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: clang
+          path: clang.txt
 
   wasm:
     needs: msvc
@@ -43,13 +59,15 @@ jobs:
           path: wasm.txt
 
   compare:
-    needs: [msvc, wasm]
+    needs: [msvc, clang, wasm]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
-      - name: every replay hash must match across MSVC x64 and WebAssembly
+      - name: every replay hash must match across MSVC x64, Apple clang arm64 and WebAssembly
         run: |
           tr -d '\r' < msvc/msvc.txt > a.txt
-          tr -d '\r' < wasm/wasm.txt > b.txt
+          tr -d '\r' < clang/clang.txt > b.txt
+          tr -d '\r' < wasm/wasm.txt > c.txt
           echo "$(wc -l < a.txt) replays compared"
           diff a.txt b.txt
+          diff a.txt c.txt

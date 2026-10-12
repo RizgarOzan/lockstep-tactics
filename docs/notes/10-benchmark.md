@@ -1,4 +1,4 @@
-# 08 — How fast is a tick, and the three allocations that were most of it
+# 10 — How fast is a tick, and the three allocations that were most of it
 
 **What:** a `bench` tool that times `step()` alone, and the one change it
 led to: the per-tick heap allocations are gone. Every number is from this
@@ -8,9 +8,14 @@ shows the median of the middle run and, in brackets, the lowest minimum.
 
 | Build | Before | After | |
 |---|---|---|---|
-| gcc 16.2 `-O3` | 187 ns/tick (162) | 66 ns/tick (60) | 2.8× |
-| MSVC 19.50 `/O2` | 225 ns/tick (201) | 88 ns/tick (80) | 2.6× |
-| Emscripten 6, Node 24 | 141 ns/tick (133) | 78 ns/tick (72) | 1.8× |
+| gcc 16.2 `-O3` | 186 ns/tick (173) | 70 ns/tick (62) | 2.7× |
+| MSVC 19.50 `/O2` | 227 ns/tick (211) | 89 ns/tick (79) | 2.6× |
+| Emscripten 6, Node 24 | 116 ns/tick (105) | 64 ns/tick (55) | 1.8× |
+
+Measured on the simulation as of the AI opponent and the matchup triangle
+(note 09); the three runs per cell were taken one after another with nothing
+else building, because a first attempt with a build running alongside gave
+medians up to twice as high.
 
 The simulation did not change: `replay 1000 600` prints the same 1,000
 hashes before and after on all three compilers, and `bench` folds every
@@ -61,14 +66,16 @@ point is to iterate a hash map; it keeps a vector under the `#if`.
 
 ## The WebAssembly build was the fast one
 
-Before the change WebAssembly ran a tick in 141 ns against 187 for gcc and
-225 for MSVC, which is the opposite of what a bytecode target should do.
-The explanation is the allocator: Emscripten's single-threaded `dlmalloc`
-is a few loads and stores, while the Windows CRT heap that gcc and MSVC
-link takes a lock and goes through the heap manager on every call. Once
-the loop stopped allocating, the three builds landed within 30 ns of each
-other, native ahead. A benchmark that includes allocation measures the
-allocator as much as the code.
+Before the change WebAssembly ran a tick in 116 ns against 186 for gcc and
+227 for MSVC, which is the opposite of what a bytecode target should do.
+The likely explanation is the allocator: Emscripten links a small
+single-threaded `dlmalloc`, while gcc and MSVC on Windows go through the CRT
+heap, which takes a lock on every call. Removing the allocations closed most
+of the gap, as that explanation predicts, but not all of it: WebAssembly is
+still a few nanoseconds ahead of gcc, and MSVC stays last by about 20 ns.
+What is left is code generation, and this benchmark does not separate it
+further. A benchmark that includes allocation measures the allocator as much
+as the code.
 
 ## How to run it
 

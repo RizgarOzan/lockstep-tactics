@@ -6,23 +6,35 @@
 <title>lockstep-tactics</title>
 <style>
   :root { color-scheme: dark; }
-  body { margin: 0; background: #181a1f; color: #d7dae0; font: 15px/1.5 system-ui, sans-serif; }
-  main { max-width: 680px; margin: 0 auto; padding: 16px; }
-  h1 { font-size: 20px; margin: 8px 0 4px; }
-  p { margin: 4px 0 12px; color: #a9afbb; }
-  a { color: #7fb4e8; }
-  canvas { display: block; width: 100%; max-width: 640px; height: auto; margin: 0 auto; outline: none; }
+  body { margin: 0; background: #101115; color: #d7dae0; font: 15px/1.5 system-ui, sans-serif; }
+  main { max-width: 900px; margin: 0 auto; padding: 16px; }
+  header { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; flex-wrap: wrap; margin: 4px 0 12px; }
+  h1 { font-size: 20px; margin: 0; letter-spacing: 0.02em; }
+  h1 span { color: #7d8595; font-weight: normal; }
+  header a { color: #7fb4e8; text-decoration: none; font-size: 14px; }
+  header a:hover { text-decoration: underline; }
+  canvas { display: block; width: 100%; max-width: 900px; height: auto; margin: 0 auto; outline: none; border-radius: 6px; box-shadow: 0 8px 30px rgba(0,0,0,.45); }
+  .how { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px 24px; margin: 18px 0 0; padding: 0; list-style: none; color: #a9afbb; font-size: 14px; }
+  .how b { color: #e2e5eb; font-weight: 600; }
+  kbd { font: 12px/1 ui-monospace, monospace; background: #1e2128; border: 1px solid #343845; border-bottom-width: 2px; border-radius: 4px; padding: 2px 5px; color: #d7dae0; }
+  p.foot { margin: 20px 0 0; color: #7d8595; font-size: 13px; }
+  p.foot a { color: #7fb4e8; }
 </style>
 </head>
 <body>
 <main>
-  <h1>lockstep-tactics</h1>
-  <p>A seeded match between two random players, simulated in fixed-point C++
-  compiled to WebAssembly. The hash at the top is the same number MSVC and gcc
-  produce for this seed and tick. Click the board, then: space pause, N next
-  seed, R restart, up/down speed.
-  <a href="https://github.com/RizgarOzan/lockstep-tactics">Source and notes</a></p>
+  <header>
+    <h1>lockstep-tactics <span>— a match you can verify</span></h1>
+    <a href="https://github.com/RizgarOzan/lockstep-tactics">source &amp; notes</a>
+  </header>
   <canvas id="canvas" tabindex="0" oncontextmenu="event.preventDefault()"></canvas>
+  <ul class="how">
+    <li><b>Play Blue.</b> Press <kbd>play Blue</kbd>, click one of your units (or its card), then a tile to move or an orange unit to attack. Orange is the built-in AI. Pause with <kbd>space</kbd> to think; orders land on the next tick.</li>
+    <li><b>Soldier beats Archer, Archer beats Knight, Knight beats Soldier.</b> Archers shoot four tiles and are weak up close; Knights are slow and hard to kill.</li>
+    <li><b>The hash is the proof.</b> The number in the corner is the state hash after this tick. MSVC on Windows, clang on an ARM Mac and this WebAssembly build all print the same one for the same seed and orders.</li>
+    <li><b>Save the replay.</b> <kbd>save replay</kbd> downloads the seed, every order and every tick's hash; <code>lockstep verify</code> checks it on any machine and names the first tick that differs.</li>
+  </ul>
+  <p class="foot">Fixed-point C++20 compiled to WebAssembly with raylib. Nothing here uses <code>float</code> except the drawing. <a href="https://github.com/RizgarOzan/lockstep-tactics#what-makes-it-deterministic">Why that matters.</a></p>
 </main>
 <script>
   var Module = { canvas: document.getElementById('canvas') };
