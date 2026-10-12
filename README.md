@@ -36,6 +36,20 @@ catches it.
 | The hash test edits each field in turn | a field missing from the hash is an invisible desync | [03](docs/notes/03-map-and-units.md) |
 | Hash, dump and diff walk one field list | a debug tool that reads other fields than the hash misses desyncs | [05](docs/notes/05-replays-and-the-bisector.md) |
 
+Two of these rules were also broken in a whole build (`-DLOCKSTEP_RISKY=unordered|float`,
+[note 06](docs/notes/06-breaking-it-on-purpose.md)), 1,000 matches each:
+
+| Broken build | MSVC | gcc | WebAssembly |
+|---|---|---|---|
+| units act in `unordered_map` order | 0 differ | 881 differ | 860 differ |
+| movement in `float` | same on all three | | |
+| `float` + gcc `-mfma -ffp-contract=fast` | | 12 differ | |
+
+MSVC's `unordered_map` happened to iterate in id order here, so that bug only
+shows on the other two compilers. Float was deterministic on all three targets
+until one compiler flag let gcc fuse multiply-adds; the fixed-point build
+under the same flag did not change.
+
 ## How the check works
 
 ```
@@ -85,8 +99,9 @@ node build-wasm/replay.js 1000 600
 1. ~~One map, three unit types, fixed-point movement and combat, fixed timestep.~~ Done.
 2. ~~Replay files: record inputs, play them back, check the hash every tick.~~ Done.
 3. ~~A desync bisector that names the first differing tick and field.~~ Done.
-4. Deliberately risky code paths (an unordered container, float interpolation
-   on the render side) to prove the checks catch what they claim to.
+4. ~~Deliberately risky code paths to prove the checks catch what they claim to.~~
+   Done for the simulation ([note 06](docs/notes/06-breaking-it-on-purpose.md)); render-side
+   float interpolation comes with rendering.
 5. raylib rendering, playable in the browser.
 
 ## Licence
