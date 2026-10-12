@@ -13,6 +13,12 @@ else()
   target_compile_options(lockstep_warnings INTERFACE -Wall -Wextra -Wpedantic -Werror)
 endif()
 
+# MinGW executables otherwise need libstdc++-6.dll on PATH at run time, and a
+# shell opened before the toolchain was installed does not have it.
+if(MINGW)
+  add_link_options(-static)
+endif()
+
 add_library(lockstep_core STATIC core/src/world.cpp)
 target_include_directories(lockstep_core PUBLIC core/include)
 target_link_libraries(lockstep_core PRIVATE lockstep_warnings)
@@ -21,8 +27,9 @@ add_executable(replay tools/replay.cpp)
 target_link_libraries(replay PRIVATE lockstep_core lockstep_warnings)
 
 include(FetchContent)
-# doctest 2.4.11 still declares cmake_minimum_required(3.0), which CMake 4 rejects.
-set(CMAKE_POLICY_VERSION_MINIMUM 3.5)
+# doctest 2.4.11 still declares cmake_minimum_required(3.0), which CMake 4 rejects
+# (and below 3.10 warns about).
+set(CMAKE_POLICY_VERSION_MINIMUM 3.10)
 FetchContent_Declare(doctest
   GIT_REPOSITORY https://github.com/doctest/doctest.git
   GIT_TAG v2.4.11
