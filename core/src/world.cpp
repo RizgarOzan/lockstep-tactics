@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <tuple>
 
+#include "lockstep/fields.hpp"
 #include "lockstep/hash.hpp"
 
 namespace lockstep {
@@ -142,28 +143,10 @@ void step(World& world, std::span<const Command> commands) {
 }
 
 std::uint64_t hash(const World& world) {
+    // Every field, as 8 little-endian bytes each, in visit_fields() order:
+    // the desync tools read the same list, so the two cannot drift apart.
     StateHash h;
-    h.add(world.tick);
-    for (Tile t : world.map.tiles) {
-        h.add(static_cast<std::uint32_t>(t));
-    }
-    h.add(static_cast<std::uint32_t>(world.units.size()));
-    for (const Unit& u : world.units) {
-        h.add(u.id);
-        h.add(static_cast<std::uint32_t>(u.owner));
-        h.add(static_cast<std::uint32_t>(u.type));
-        h.add(u.hp);
-        h.add(u.x.raw);
-        h.add(u.y.raw);
-        h.add(static_cast<std::uint32_t>(u.order));
-        h.add(u.target_x);
-        h.add(u.target_y);
-        h.add(u.target_id);
-        h.add(u.cooldown);
-    }
-    h.add(world.rng.state());
-    h.add(world.rng.increment());
-    h.add(world.hit_percent);
+    visit_fields(world, [&](const Field&, std::uint64_t value) { h.add(value); });
     return h.value();
 }
 
