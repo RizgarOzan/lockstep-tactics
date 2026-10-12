@@ -14,6 +14,14 @@
   header a { color: #7fb4e8; text-decoration: none; font-size: 14px; }
   header a:hover { text-decoration: underline; }
   canvas { display: block; width: 100%; max-width: 900px; height: auto; margin: 0 auto; outline: none; border-radius: 6px; box-shadow: 0 8px 30px rgba(0,0,0,.45); }
+  .net { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 14px 0 0; padding: 12px 14px; background: #171920; border: 1px solid #272a33; border-radius: 8px; font-size: 14px; }
+  .net b { color: #e2e5eb; margin-right: 4px; }
+  .net button { font: inherit; padding: 6px 12px; border-radius: 6px; border: 1px solid #343845; background: #22252e; color: #e2e5eb; cursor: pointer; }
+  .net button:hover { background: #2c303b; }
+  .net button:disabled { opacity: .5; cursor: default; }
+  .net input { font: inherit; width: 7ch; padding: 6px 8px; border-radius: 6px; border: 1px solid #343845; background: #0f1014; color: #e2e5eb; text-transform: uppercase; letter-spacing: .1em; }
+  .net .code { font: 600 18px/1 ui-monospace, monospace; letter-spacing: .15em; color: #ffd27a; background: #0f1014; padding: 6px 10px; border-radius: 6px; }
+  .net .status { color: #a9afbb; }
   .how { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px 24px; margin: 18px 0 0; padding: 0; list-style: none; color: #a9afbb; font-size: 14px; }
   .how b { color: #e2e5eb; font-weight: 600; }
   kbd { font: 12px/1 ui-monospace, monospace; background: #1e2128; border: 1px solid #343845; border-bottom-width: 2px; border-radius: 4px; padding: 2px 5px; color: #d7dae0; }
@@ -28,16 +36,150 @@
     <a href="https://github.com/RizgarOzan/lockstep-tactics">source &amp; notes</a>
   </header>
   <canvas id="canvas" tabindex="0" oncontextmenu="event.preventDefault()"></canvas>
+  <div class="net" id="net">
+    <b>Play a friend</b>
+    <button id="host" disabled>Create a room</button>
+    <span id="code" class="code" hidden></span>
+    <input id="join-code" placeholder="code" maxlength="6" autocomplete="off" spellcheck="false">
+    <button id="join" disabled>Join</button>
+    <span id="status" class="status">loading…</span>
+  </div>
   <ul class="how">
     <li><b>Play Blue.</b> Press <kbd>play Blue</kbd>, click one of your units (or its card), then a tile to move or an orange unit to attack. Orange is the built-in AI. Pause with <kbd>space</kbd> to think; orders land on the next tick.</li>
+    <li><b>Play a friend.</b> One of you creates a room and reads out the code, the other joins. The two browsers then talk directly over WebRTC; the room code only carries the handshake. Each tick runs when both players' orders are in, three ticks ahead, and both sides compare state hashes as they go.</li>
     <li><b>Soldier beats Archer, Archer beats Knight, Knight beats Soldier.</b> Archers shoot four tiles and are weak up close; Knights are slow and hard to kill.</li>
-    <li><b>The hash is the proof.</b> The number in the corner is the state hash after this tick. MSVC on Windows, clang on an ARM Mac and this WebAssembly build all print the same one for the same seed and orders.</li>
-    <li><b>Save the replay.</b> <kbd>save replay</kbd> downloads the seed, every order and every tick's hash; <code>lockstep verify</code> checks it on any machine and names the first tick that differs.</li>
+    <li><b>The hash is the proof.</b> The number in the corner is the state hash after this tick. MSVC on Windows, clang on an ARM Mac and this WebAssembly build all print the same one for the same seed and orders; in an online match both browsers must too.</li>
+    <li><b>Save the replay.</b> <kbd>save</kbd> downloads the seed, every order and every tick's hash; <code>lockstep verify</code> checks it on any machine and names the first tick that differs.</li>
   </ul>
-  <p class="foot">Fixed-point C++20 compiled to WebAssembly with raylib. Nothing here uses <code>float</code> except the drawing. <a href="https://github.com/RizgarOzan/lockstep-tactics#what-makes-it-deterministic">Why that matters.</a></p>
+  <p class="foot">Fixed-point C++20 compiled to WebAssembly with raylib. Nothing here uses <code>float</code> except the drawing. Rooms go through <a href="https://ntfy.sh">ntfy.sh</a> (a public pub/sub relay) for the handshake only. <a href="https://github.com/RizgarOzan/lockstep-tactics#what-makes-it-deterministic">Why the hash matters.</a></p>
 </main>
 <script>
-  var Module = { canvas: document.getElementById('canvas') };
+  var Module = {
+    canvas: document.getElementById('canvas'),
+    onRuntimeInitialized: function () { lockstepRoom.ready(); }
+  };
+
+  // Two browsers, one match. The handshake (offer, answer, ICE candidates)
+  // goes through a public ntfy.sh topic named after the room code; after
+  // that the browsers talk directly over a WebRTC data channel, ordered and
+  // reliable, and every message on it is a lockstep frame for the C++ side.
+  var lockstepRoom = (function () {
+    var RELAY = new URLSearchParams(location.search).get('relay') || 'https://ntfy.sh';
+    var DELAY = 3;  // ticks the orders run ahead; must match on both sides
+    var $ = function (id) { return document.getElementById(id); };
+    var role, topic, seed, pc, dc, ws, queuedIce = [];
+
+    function status(text) { $('status').textContent = text; }
+    function topicFor(code) { return 'lockstep-tactics-' + code.toLowerCase(); }
+    function newCode() {
+      var letters = 'abcdefghjkmnpqrstuvwxyz23456789', out = '';
+      var bytes = crypto.getRandomValues(new Uint8Array(6));
+      for (var i = 0; i < 6; i++) out += letters[bytes[i] % letters.length];
+      return out;
+    }
+    function publish(msg) {
+      msg.from = role;
+      return fetch(RELAY + '/' + topic, { method: 'POST', body: JSON.stringify(msg) })
+        .catch(function () { status('could not reach the relay'); });
+    }
+    function subscribe(onMessage, onOpen) {
+      ws = new WebSocket(RELAY.replace(/^http/, 'ws') + '/' + topic + '/ws');
+      ws.onopen = onOpen;
+      ws.onerror = function () { status('could not reach the relay'); };
+      ws.onmessage = function (e) {
+        var m;
+        try { m = JSON.parse(e.data); } catch (err) { return; }
+        if (m.event !== 'message') return;
+        var body;
+        try { body = JSON.parse(m.message); } catch (err) { return; }
+        if (body && body.from && body.from !== role) onMessage(body);
+      };
+    }
+    function peer() {
+      pc = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] });
+      pc.onicecandidate = function (e) { if (e.candidate) publish({ type: 'ice', cand: e.candidate.toJSON() }); };
+      pc.onconnectionstatechange = function () {
+        if (pc.connectionState === 'failed') status('connection failed (a strict NAT, probably); try the other way round');
+        if (pc.connectionState === 'disconnected') closed();
+      };
+    }
+    function ice(cand) {
+      if (pc.remoteDescription) pc.addIceCandidate(cand).catch(function () {});
+      else queuedIce.push(cand);
+    }
+    function flushIce() { queuedIce.forEach(function (c) { pc.addIceCandidate(c).catch(function () {}); }); queuedIce = []; }
+    function wire(channel) {
+      dc = channel;
+      dc.onopen = function () {
+        window.lockstepNet = { send: function (s) { if (dc.readyState === 'open') dc.send(s); } };
+        Module.ccall('net_start', null, ['number', 'number', 'number'], [role === 'host' ? 0 : 1, seed, DELAY]);
+        status('connected: you are ' + (role === 'host' ? 'Blue' : 'Orange') + ', seed ' + seed);
+        if (ws) ws.close();
+      };
+      dc.onmessage = function (e) { Module.ccall('net_receive', null, ['string'], [e.data]); };
+      dc.onclose = closed;
+    }
+    function closed() {
+      if (!window.lockstepNet) return;
+      window.lockstepNet = null;
+      Module.ccall('net_closed', null, [], []);
+      status('the other player left');
+    }
+    function lock() { $('host').disabled = true; $('join').disabled = true; $('join-code').disabled = true; }
+
+    function host() {
+      role = 'host';
+      var code = newCode();
+      topic = topicFor(code);
+      seed = 1 + (crypto.getRandomValues(new Uint32Array(1))[0] % 1000000);
+      lock();
+      $('code').textContent = code.toUpperCase();
+      $('code').hidden = false;
+      subscribe(async function (m) {
+        if (m.type === 'join') {
+          peer();
+          wire(pc.createDataChannel('lockstep', { ordered: true }));
+          var offer = await pc.createOffer();
+          await pc.setLocalDescription(offer);
+          publish({ type: 'offer', sdp: offer.sdp, seed: seed });
+          status('a player joined, connecting…');
+        } else if (m.type === 'answer' && pc) {
+          await pc.setRemoteDescription({ type: 'answer', sdp: m.sdp });
+          flushIce();
+        } else if (m.type === 'ice' && pc) {
+          ice(m.cand);
+        }
+      }, function () { status('room open, waiting for a player: tell them the code'); });
+    }
+
+    function join() {
+      var code = $('join-code').value.trim();
+      if (code.length !== 6) { status('a room code has 6 characters'); return; }
+      role = 'guest';
+      topic = topicFor(code);
+      lock();
+      subscribe(async function (m) {
+        if (m.type === 'offer') {
+          seed = m.seed;
+          peer();
+          pc.ondatachannel = function (e) { wire(e.channel); };
+          await pc.setRemoteDescription({ type: 'offer', sdp: m.sdp });
+          flushIce();
+          var answer = await pc.createAnswer();
+          await pc.setLocalDescription(answer);
+          publish({ type: 'answer', sdp: answer.sdp });
+          status('connecting…');
+        } else if (m.type === 'ice' && pc) {
+          ice(m.cand);
+        }
+      }, function () { publish({ type: 'join' }); status('joining room ' + code.toUpperCase() + '…'); });
+    }
+
+    $('host').onclick = host;
+    $('join').onclick = join;
+    $('join-code').onkeydown = function (e) { if (e.key === 'Enter') join(); };
+    return { ready: function () { $('host').disabled = false; $('join').disabled = false; status(''); } };
+  })();
 </script>
 {{{ SCRIPT }}}
 </body>
