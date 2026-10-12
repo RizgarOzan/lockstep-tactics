@@ -58,7 +58,12 @@ TEST_CASE("the hash covers every field of the state") {
         [](World& w) { w.units[0].x = w.units[0].x + Fixed::from_raw(1); },
         [](World& w) { w.units[0].y = w.units[0].y + Fixed::from_raw(1); },
         [](World& w) { w.rng.next(); },
-        [](World& w) { ++w.placeholder; },
+        [](World& w) { w.units[0].order = Order::Attack; },
+        [](World& w) { ++w.units[0].target_x; },
+        [](World& w) { ++w.units[0].target_y; },
+        [](World& w) { ++w.units[0].target_id; },
+        [](World& w) { ++w.units[0].cooldown; },
+        [](World& w) { ++w.hit_percent; },
     };
     for (std::size_t i = 0; i < edits.size(); ++i) {
         World changed = base;
