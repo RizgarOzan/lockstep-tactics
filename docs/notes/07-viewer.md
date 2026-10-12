@@ -30,6 +30,25 @@ natively the same function runs in an ordinary loop. A small custom shell page
 to the screen width; on a 375 px phone it fits without horizontal scrolling.
 The keyboard controls do nothing on a phone yet; the match still plays.
 
+**Pointer input, measured in the browser.** The HUD buttons take a mouse
+and a finger. Three things turned out to be true only after measuring them
+with a debug readout drawn on the canvas (`-DLOCKSTEP_DEBUG_INPUT`):
+
+- Emscripten's GLFW port already maps a CSS-scaled canvas back to canvas
+  pixels: at a 343 px wide phone layout the pointer over the pause button read
+  (62, 67) in canvas space without any correction. A `SetMouseScale` call I
+  had added on top of that would have scaled twice; it is gone.
+- raylib's web backend maps a touch to the mouse *position* but never to the
+  mouse *button* (`EmscriptenTouchCallback` in `rcore_web.c`), so
+  `IsMouseButtonPressed()` never fires on a phone. A click is now the rising
+  edge of `IsMouseButtonDown() || GetTouchPointCount() > 0`, one edge detector
+  for both, so a mouse click cannot count twice.
+- A synthetic click whose down and up land inside one frame is invisible to
+  frame-based edge detection. The browser automation's instant clicks "proved"
+  the buttons dead three times; a held press showed them working. Measured
+  afterwards: a 1.5 s mouse press at desktop width gave exactly one press and
+  paused the match; a 1.5 s touch at phone width did the same.
+
 **Questions this answers in an interview**
 - Where may a lockstep game use float? (Anywhere its result is not part of the
   simulated state: rendering, interpolation, audio.)

@@ -5,6 +5,11 @@
 **[▶ Watch a match in the browser](https://rizgarozan.github.io/lockstep-tactics/)**: the
 simulation compiled to WebAssembly, with the live state hash on screen.
 
+<p align="center">
+  <img src="docs/media/match.gif" width="420" alt="Seed 1: blue (circle soldier, triangle archer, square knight) and orange units walk, trade hits with flashes and attack lines, and blue wins at tick 139; the state hash updates in the corner every tick">
+</p>
+<p align="center"><sub>Seed 1 at 2× speed, rendered headless by <code>viewer --capture</code>.</sub></p>
+
 A small tick-based tactics simulation in C++20, written to be **bit-identical
 across compilers**: the same inputs must give the same state hash under MSVC
 x64 and under WebAssembly, on every tick. That property is what lockstep
@@ -114,7 +119,7 @@ emcmake cmake -S . -B build-web -DLOCKSTEP_VIEWER=ON && cmake --build build-web 
    Done for the simulation ([note 06](docs/notes/06-breaking-it-on-purpose.md)); render-side
    float interpolation comes with rendering.
 5. ~~raylib rendering, playable in the browser.~~ Done ([note 07](docs/notes/07-viewer.md)).
-6. Touch controls for the browser page, and a real player instead of random orders.
+6. ~~Touch controls for the browser page~~ (the HUD buttons take a finger as well as a mouse) and a real player instead of random orders.
 
 ## Licence
 
