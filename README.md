@@ -59,6 +59,24 @@ shows on the other two compilers. Float was deterministic on all three targets
 until one compiler flag let gcc fuse multiply-adds; the fixed-point build
 under the same flag did not change.
 
+## Why not …
+
+- **… just use `float` and test on one machine?** That is what most hobby
+  lockstep games do, and it is exactly the bug this repo measures: the
+  `unordered_map` build passes every test on MSVC and desyncs on two other
+  compilers. The point is not that fixed-point is clever; it is that the
+  claim "bit-identical" is checked on every push, across compilers, with
+  replays that any machine can verify.
+- **… an engine's netcode (Unity Netcode, Godot, Photon)?** Those give you
+  state synchronisation; they do not give you a simulation that is the same
+  everywhere, and they cannot be dropped into a browser tab. This is the
+  layer underneath, small enough to read in an afternoon (about 700 lines of
+  C++ for the simulation and the tools).
+- **… GGPO or a rollback library?** Rollback assumes determinism and solves
+  latency on top of it. The hard part they leave to you, "is my simulation
+  actually deterministic, and where did it stop being so", is what the replay
+  format and the bisector here answer.
+
 ## How the check works
 
 ```
@@ -120,6 +138,21 @@ emcmake cmake -S . -B build-web -DLOCKSTEP_VIEWER=ON && cmake --build build-web 
    float interpolation comes with rendering.
 5. ~~raylib rendering, playable in the browser.~~ Done ([note 07](docs/notes/07-viewer.md)).
 6. ~~Touch controls for the browser page~~ (the HUD buttons take a finger as well as a mouse) and a real player instead of random orders.
+
+## Contributing
+
+Good first changes, each small enough for one pull request:
+
+- a new deliberately broken build under `LOCKSTEP_RISKY` (a `std::sort` on
+  equal keys, a `size_t` in the hash, signed overflow) with its measured
+  numbers added to the table above;
+- a third CI compiler (clang on macOS) in `determinism.yml`;
+- a real player in the browser viewer: pick a unit, click a tile or an enemy,
+  and send a `Command`; replays must keep working unchanged.
+
+The rule for every change: `ctest` green under at least two compilers, and
+`replay 1000 600` identical between them. If a change is meant to alter the
+simulation, say so in the commit and expect every replay hash to move.
 
 ## Licence
 
