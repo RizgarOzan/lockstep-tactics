@@ -54,6 +54,12 @@ struct Unit {
 // Ticks between two attacks of the same unit, hit or miss.
 inline constexpr std::uint32_t kAttackCooldown = 10;
 
+// Two players, one unit of each type: make_world() never spawns more, and
+// step() sizes its per-tick scratch space from this.
+inline constexpr std::size_t kMaxUnits = 6;
+// Orders per tick that step() sorts without touching the heap.
+inline constexpr std::size_t kInlineCommands = 8;
+
 // One player's order for one unit. Commands for units the player does not
 // own, or that no longer exist, are ignored.
 struct Command {

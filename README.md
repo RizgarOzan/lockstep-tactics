@@ -81,6 +81,16 @@ Write-up of these two experiments:
   actually deterministic, and where did it stop being so", is what the replay
   format and the bisector here answer.
 
+## How fast
+
+A tick costs 60–90 ns on this laptop, gcc, MSVC and WebAssembly within 30 ns
+of each other, measured by `bench`, which times `step()` on recorded orders
+and leaves the input generator out. It was 2–3× slower until the three
+per-tick heap allocations were removed, and WebAssembly was the fastest of
+the three builds until then, because its allocator is single-threaded.
+Method, numbers and the fix: [note 08](docs/notes/08-benchmark.md). The
+benchmark does not run in CI on purpose; shared runners are not a clock.
+
 ## How the check works
 
 ```
@@ -115,6 +125,7 @@ cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
 cmake --build build
 ctest --test-dir build
 build/replay 1000 600
+build/bench 200 600 50    # ns per tick: min, median, max over 50 repeats
 ```
 
 WebAssembly, with the Emscripten SDK active:
@@ -142,6 +153,7 @@ emcmake cmake -S . -B build-web -DLOCKSTEP_VIEWER=ON && cmake --build build-web 
    float interpolation comes with rendering.
 5. ~~raylib rendering, playable in the browser.~~ Done ([note 07](docs/notes/07-viewer.md)).
 6. ~~Touch controls for the browser page~~ (the HUD buttons take a finger as well as a mouse) and a real player instead of random orders.
+7. ~~A benchmark of the step alone, and the first optimisation it pointed at.~~ Done ([note 08](docs/notes/08-benchmark.md)).
 
 ## Contributing
 

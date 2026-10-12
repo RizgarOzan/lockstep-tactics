@@ -1,6 +1,8 @@
 #include "lockstep/world.hpp"
 
 #include <algorithm>
+#include <array>
+#include <span>
 #include <tuple>
 
 #if defined(LOCKSTEP_RISKY_FLOAT)
@@ -114,6 +116,11 @@ struct Hit {
     std::int32_t damage;
 };
 
+// The acting loop walks either the unit vector or, in the risky build, a list
+// of pointers into it.
+[[maybe_unused]] Unit& deref(Unit& u) { return u; }
+[[maybe_unused]] Unit& deref(Unit* u) { return *u; }
+
 }  // namespace
 
 void step(World& world, std::span<const Command> commands) {
@@ -122,7 +129,19 @@ void step(World& world, std::span<const Command> commands) {
     //    not just (player, unit): with two orders for one unit in one tick, a
     //    stable sort on the unit alone would keep arrival order, and the
     //    "last order wins" would differ between machines.
-    std::vector<Command> sorted(commands.begin(), commands.end());
+    //    A tick rarely carries more than a handful of orders, so they are
+    //    sorted in a buffer on the stack; only a flood of orders pays for a
+    //    heap allocation. Measured in docs/notes/08-benchmark.md.
+    std::array<Command, kInlineCommands> inline_commands;
+    std::vector<Command> spilled_commands;
+    std::span<Command> sorted;
+    if (commands.size() <= inline_commands.size()) {
+        std::copy(commands.begin(), commands.end(), inline_commands.begin());
+        sorted = std::span<Command>(inline_commands.data(), commands.size());
+    } else {
+        spilled_commands.assign(commands.begin(), commands.end());
+        sorted = spilled_commands;
+    }
     std::sort(sorted.begin(), sorted.end(), [](const Command& a, const Command& b) {
         return std::tie(a.player, a.unit_id, a.order, a.target_x, a.target_y, a.target_id) <
                std::tie(b.player, b.unit_id, b.order, b.target_x, b.target_y, b.target_id);
@@ -137,19 +156,23 @@ void step(World& world, std::span<const Command> commands) {
     }
 
     // 2. Movement and attacks, in unit id order. Attacks only record hits.
-    std::vector<Unit*> acting;
+    //    Nothing is added to or removed from `units` until step 3, so the
+    //    vector is walked in place; a unit lands at most one hit per tick, so
+    //    the hits fit in a fixed array of kMaxUnits.
 #if defined(LOCKSTEP_RISKY_UNORDERED)
     // RISKY BUILD ONLY (cmake -DLOCKSTEP_RISKY=unordered): units act in the
     // iteration order of a hash map, which each standard library decides.
     std::unordered_map<std::uint32_t, Unit*> by_id;
     for (Unit& u : world.units) by_id.emplace(u.id, &u);
+    std::vector<Unit*> acting;
     for (const auto& entry : by_id) acting.push_back(entry.second);
 #else
-    for (Unit& u : world.units) acting.push_back(&u);
+    std::vector<Unit>& acting = world.units;
 #endif
-    std::vector<Hit> hits;
-    for (Unit* unit : acting) {
-        Unit& u = *unit;
+    std::array<Hit, kMaxUnits> hits;
+    std::size_t hit_count = 0;
+    for (auto& unit : acting) {
+        Unit& u = deref(unit);
         if (u.cooldown > 0) --u.cooldown;
         if (u.order == Order::Move) {
             walk(world.map, u, Fixed::from_int(u.target_x) + Fixed::from_ratio(1, 2),
@@ -167,7 +190,7 @@ void step(World& world, std::span<const Command> commands) {
                 walk(world.map, u, target->x, target->y);
             } else if (u.cooldown == 0) {
                 if (world.rng.below(100) < world.hit_percent) {
-                    hits.push_back({target->id, stats(u.type).damage});
+                    hits[hit_count++] = {target->id, stats(u.type).damage};
                 }
                 u.cooldown = kAttackCooldown;
             }
@@ -176,8 +199,8 @@ void step(World& world, std::span<const Command> commands) {
 
     // 3. Damage lands all at once, so a unit killed this tick still struck
     //    back, whichever of the two has the lower id.
-    for (const Hit& h : hits) {
-        if (Unit* t = find_unit(world.units, h.target_id)) t->hp -= h.damage;
+    for (std::size_t i = 0; i < hit_count; ++i) {
+        if (Unit* t = find_unit(world.units, hits[i].target_id)) t->hp -= hits[i].damage;
     }
     std::erase_if(world.units, [](const Unit& u) { return u.hp <= 0; });
     ++world.tick;
