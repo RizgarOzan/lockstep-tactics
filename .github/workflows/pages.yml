@@ -1,0 +1,42 @@
+name: pages
+
+# Builds the browser viewer from source on every push to main and publishes
+# it, so the live page never lags the code.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mymindstorm/setup-emsdk@v14
+      - run: emcmake cmake -S . -B build-web -DCMAKE_BUILD_TYPE=Release -DLOCKSTEP_VIEWER=ON
+      - run: cmake --build build-web --target viewer
+      - run: |
+          mkdir site
+          cp build-web/index.html build-web/index.js build-web/index.wasm site/
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

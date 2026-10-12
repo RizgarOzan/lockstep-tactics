@@ -2,6 +2,9 @@
 
 [![determinism](https://github.com/RizgarOzan/lockstep-tactics/actions/workflows/determinism.yml/badge.svg)](https://github.com/RizgarOzan/lockstep-tactics/actions/workflows/determinism.yml)
 
+**[▶ Watch a match in the browser](https://rizgarozan.github.io/lockstep-tactics/)**: the
+simulation compiled to WebAssembly, with the live state hash on screen.
+
 A small tick-based tactics simulation in C++20, written to be **bit-identical
 across compilers**: the same inputs must give the same state hash under MSVC
 x64 and under WebAssembly, on every tick. That property is what lockstep
@@ -16,7 +19,7 @@ overflow.
 > push). A replay recorded under MSVC also verifies tick by tick under
 > WebAssembly, and when two runs disagree the `lockstep` tool names the first
 > tick and the field: it located 100 of 100 injected desyncs exactly.
-> Not yet: rendering.
+> A raylib viewer plays matches natively and [in the browser](https://rizgarozan.github.io/lockstep-tactics/).
 
 ## What makes it deterministic
 
@@ -35,6 +38,7 @@ catches it.
 | Damage applied after everyone acts | unit ids must not decide who dies | [04](docs/notes/04-commands-and-combat.md) |
 | The hash test edits each field in turn | a field missing from the hash is an invisible desync | [03](docs/notes/03-map-and-units.md) |
 | Hash, dump and diff walk one field list | a debug tool that reads other fields than the hash misses desyncs | [05](docs/notes/05-replays-and-the-bisector.md) |
+| Float only where nothing reads it back (rendering) | smooth motion without touching the simulated state | [07](docs/notes/07-viewer.md) |
 
 Two of these rules were also broken in a whole build (`-DLOCKSTEP_RISKY=unordered|float`,
 [note 06](docs/notes/06-breaking-it-on-purpose.md)), 1,000 matches each:
@@ -94,6 +98,13 @@ cmake --build build-wasm
 node build-wasm/replay.js 1000 600
 ```
 
+The viewer is opt-in because it fetches raylib:
+
+```bash
+cmake -S . -B build-viewer -DLOCKSTEP_VIEWER=ON && cmake --build build-viewer --target viewer
+emcmake cmake -S . -B build-web -DLOCKSTEP_VIEWER=ON && cmake --build build-web --target viewer   # index.html
+```
+
 ## Roadmap
 
 1. ~~One map, three unit types, fixed-point movement and combat, fixed timestep.~~ Done.
@@ -102,7 +113,8 @@ node build-wasm/replay.js 1000 600
 4. ~~Deliberately risky code paths to prove the checks catch what they claim to.~~
    Done for the simulation ([note 06](docs/notes/06-breaking-it-on-purpose.md)); render-side
    float interpolation comes with rendering.
-5. raylib rendering, playable in the browser.
+5. ~~raylib rendering, playable in the browser.~~ Done ([note 07](docs/notes/07-viewer.md)).
+6. Touch controls for the browser page, and a real player instead of random orders.
 
 ## Licence
 
