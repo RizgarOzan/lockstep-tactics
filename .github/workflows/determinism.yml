@@ -1,0 +1,45 @@
+name: determinism
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  msvc:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: cmake -S . -B build
+      - run: cmake --build build --config Release
+      - run: ctest --test-dir build -C Release --output-on-failure
+      - run: build\Release\replay.exe 1000 600 > msvc.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: msvc
+          path: msvc.txt
+
+  wasm:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mymindstorm/setup-emsdk@v14
+      - run: emcmake cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+      - run: cmake --build build
+      - run: node build/core_tests.js
+      - run: node build/replay.js 1000 600 > wasm.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wasm
+          path: wasm.txt
+
+  compare:
+    needs: [msvc, wasm]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+      - name: every replay hash must match across MSVC x64 and WebAssembly
+        run: |
+          tr -d '\r' < msvc/msvc.txt > a.txt
+          tr -d '\r' < wasm/wasm.txt > b.txt
+          echo "$(wc -l < a.txt) replays compared"
+          diff a.txt b.txt
