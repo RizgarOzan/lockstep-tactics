@@ -1,7 +1,11 @@
 # 07 — The viewer
 
 **What:** `tools/viewer.cpp`, a raylib window that plays a seeded match ten
-ticks a second and draws the map, the units, their health and the state hash.
+ticks a second and draws the map, the units, their health and the state hash;
+since note 08 it also takes orders from a person, and since note 09 Orange is
+the AI. The layout is a top bar, the 640 px board and a 260 px panel of unit
+cards and buttons; text is drawn at 10 or 20 px only, because raylib's
+default font is a 10 px bitmap and whole multiples keep it crisp.
 The same file builds natively and, with Emscripten, into a ~0.3 MB page that
 GitHub Pages serves (`.github/workflows/pages.yml` builds it from source on
 every push to main).
@@ -27,8 +31,9 @@ the same value.
 under Emscripten the frame function is handed to `emscripten_set_main_loop`;
 natively the same function runs in an ordinary loop. A small custom shell page
 (`tools/shell.html`) replaces Emscripten's default one and scales the canvas
-to the screen width; on a 375 px phone it fits without horizontal scrolling.
-The keyboard controls do nothing on a phone yet; the match still plays.
+to the screen width; on a 375 px phone the 900 px canvas fits without
+horizontal scrolling, at the cost of small text. The keyboard controls do
+nothing on a phone; the buttons and the board take a finger.
 
 **Pointer input, measured in the browser.** The HUD buttons take a mouse
 and a finger. Three things turned out to be true only after measuring them

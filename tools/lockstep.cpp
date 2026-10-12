@@ -1,6 +1,6 @@
 // Replay files and desync hunting.
 //
-//   lockstep record <seed> <ticks> <file>   play random orders, save commands + per-tick hashes
+//   lockstep record <seed> <ticks> <file>   play random vs the AI, save commands + per-tick hashes
 //   lockstep verify <file>                  replay here; "ok" or the first tick whose hash differs
 //   lockstep dump <file> <tick>             every field of the state after <tick>, one per line
 //
@@ -14,7 +14,7 @@
 #include <string>
 
 #include "lockstep/fields.hpp"
-#include "lockstep/random_orders.hpp"
+#include "lockstep/ai.hpp"
 #include "lockstep/replay.hpp"
 
 namespace {
@@ -47,7 +47,7 @@ int main(int argc, char** argv) {
         const auto ticks = static_cast<std::uint32_t>(std::strtoul(argv[3], nullptr, 10));
         std::uint64_t rng = seed;
         const auto r = lockstep::record(seed, ticks, [&](const lockstep::World& w) {
-            return lockstep::random_orders(w, rng);
+            return lockstep::match_orders(w, rng);
         });
         std::ofstream(argv[4], std::ios::binary) << lockstep::to_text(r);
         std::printf("recorded %u ticks\n", ticks);

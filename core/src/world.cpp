@@ -34,6 +34,17 @@ Fixed tile_centre(int tile) { return Fixed::from_int(tile) + Fixed::from_ratio(1
 
 const UnitStats& stats(UnitType type) { return kStats[static_cast<std::size_t>(type)]; }
 
+std::int32_t damage(UnitType attacker, UnitType target) {
+    // Rock, paper, scissors with a bonus rather than a multiplier: an Archer
+    // (6 hp) still survives one Soldier hit, so a mistake costs a unit over a
+    // few ticks, not at once.
+    constexpr std::int32_t kBonus = 2;
+    const bool strong = (attacker == UnitType::Soldier && target == UnitType::Archer) ||
+                        (attacker == UnitType::Archer && target == UnitType::Knight) ||
+                        (attacker == UnitType::Knight && target == UnitType::Soldier);
+    return stats(attacker).damage + (strong ? kBonus : 0);
+}
+
 World make_world(std::uint64_t seed) {
     World world;
     world.rng = Pcg32(seed, 1u);
@@ -167,7 +178,7 @@ void step(World& world, std::span<const Command> commands) {
                 walk(world.map, u, target->x, target->y);
             } else if (u.cooldown == 0) {
                 if (world.rng.below(100) < world.hit_percent) {
-                    hits.push_back({target->id, stats(u.type).damage});
+                    hits.push_back({target->id, damage(u.type, target->type)});
                 }
                 u.cooldown = kAttackCooldown;
             }
@@ -188,6 +199,16 @@ std::uint64_t hash(const World& world) {
     // the desync tools read the same list, so the two cannot drift apart.
     StateHash h;
     visit_fields(world, [&](const Field&, std::uint64_t value) { h.add(value); });
+#if defined(LOCKSTEP_RISKY_SIZE_T)
+    // RISKY BUILD ONLY (cmake -DLOCKSTEP_RISKY=size_t): also feed the unit
+    // count as a size_t, one byte per byte of *this target's* size_t. That is
+    // 8 bytes on x64 and 4 on wasm32, so the two can never agree, on any
+    // tick, however correct the simulation is. See docs/notes/06.
+    const std::size_t n = world.units.size();
+    for (std::size_t i = 0; i < sizeof n; ++i) {
+        h.add(static_cast<std::uint32_t>((n >> (8 * i)) & 0xffu));
+    }
+#endif
     return h.value();
 }
 
