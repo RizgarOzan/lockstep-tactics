@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>lockstep-tactics</title>
+<style>
+  :root { color-scheme: dark; }
+  body { margin: 0; background: #181a1f; color: #d7dae0; font: 15px/1.5 system-ui, sans-serif; }
+  main { max-width: 680px; margin: 0 auto; padding: 16px; }
+  h1 { font-size: 20px; margin: 8px 0 4px; }
+  p { margin: 4px 0 12px; color: #a9afbb; }
+  a { color: #7fb4e8; }
+  canvas { display: block; width: 100%; max-width: 640px; height: auto; margin: 0 auto; outline: none; }
+</style>
+</head>
+<body>
+<main>
+  <h1>lockstep-tactics</h1>
+  <p>A seeded match between two random players, simulated in fixed-point C++
+  compiled to WebAssembly. The hash at the top is the same number MSVC and gcc
+  produce for this seed and tick. Click the board, then: space pause, N next
+  seed, R restart, up/down speed.
+  <a href="https://github.com/RizgarOzan/lockstep-tactics">Source and notes</a></p>
+  <canvas id="canvas" tabindex="0" oncontextmenu="event.preventDefault()"></canvas>
+</main>
+<script>
+  var Module = { canvas: document.getElementById('canvas') };
+</script>
+{{{ SCRIPT }}}
+</body>
+</html>

@@ -58,5 +58,29 @@ FetchContent_MakeAvailable(doctest)
 add_executable(core_tests tests/test_hash.cpp tests/test_world.cpp tests/test_fixed.cpp tests/test_rng.cpp tests/test_setup.cpp tests/test_combat.cpp tests/test_replay.cpp)
 target_link_libraries(core_tests PRIVATE lockstep_core lockstep_warnings doctest::doctest_with_main)
 
+# The viewer pulls in raylib, so it is opt-in: the determinism CI never needs it.
+option(LOCKSTEP_VIEWER "Build the raylib match viewer" OFF)
+if(LOCKSTEP_VIEWER)
+  set(BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+  set(BUILD_GAMES OFF CACHE BOOL "" FORCE)
+  if(EMSCRIPTEN)
+    set(PLATFORM Web CACHE STRING "" FORCE)
+  endif()
+  FetchContent_Declare(raylib
+    GIT_REPOSITORY https://github.com/raysan5/raylib.git
+    GIT_TAG 6.0
+    GIT_SHALLOW TRUE
+    SYSTEM)
+  FetchContent_MakeAvailable(raylib)
+  add_executable(viewer tools/viewer.cpp)
+  target_link_libraries(viewer PRIVATE lockstep_core lockstep_warnings raylib)
+  if(EMSCRIPTEN)
+    set_target_properties(viewer PROPERTIES OUTPUT_NAME index SUFFIX ".html")
+    target_link_options(viewer PRIVATE -sUSE_GLFW=3 -sALLOW_MEMORY_GROWTH=1
+      "--shell-file=${CMAKE_CURRENT_SOURCE_DIR}/tools/shell.html")
+    set_property(TARGET viewer APPEND PROPERTY LINK_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/tools/shell.html)
+  endif()
+endif()
+
 enable_testing()
 add_test(NAME core_tests COMMAND core_tests)
