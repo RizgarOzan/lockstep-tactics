@@ -13,12 +13,16 @@ jobs:
       - run: cmake --build build --config Release
       - run: ctest --test-dir build -C Release --output-on-failure
       - run: build\Release\replay.exe 1000 600 > msvc.txt
+      - run: build\Release\lockstep.exe record 7 600 msvc-replay.txt
       - uses: actions/upload-artifact@v4
         with:
           name: msvc
-          path: msvc.txt
+          path: |
+            msvc.txt
+            msvc-replay.txt
 
   wasm:
+    needs: msvc
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -27,6 +31,12 @@ jobs:
       - run: cmake --build build
       - run: node build/core_tests.js
       - run: node build/replay.js 1000 600 > wasm.txt
+      - uses: actions/download-artifact@v4
+        with:
+          name: msvc
+          path: from-msvc
+      - name: a replay recorded under MSVC must match tick by tick
+        run: node build/lockstep.js verify from-msvc/msvc-replay.txt
       - uses: actions/upload-artifact@v4
         with:
           name: wasm

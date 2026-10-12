@@ -19,12 +19,19 @@ if(MINGW)
   add_link_options(-static)
 endif()
 
-add_library(lockstep_core STATIC core/src/world.cpp)
+add_library(lockstep_core STATIC core/src/world.cpp core/src/replay.cpp)
 target_include_directories(lockstep_core PUBLIC core/include)
 target_link_libraries(lockstep_core PRIVATE lockstep_warnings)
 
 add_executable(replay tools/replay.cpp)
 target_link_libraries(replay PRIVATE lockstep_core lockstep_warnings)
+
+add_executable(lockstep tools/lockstep.cpp)
+target_link_libraries(lockstep PRIVATE lockstep_core lockstep_warnings)
+if(EMSCRIPTEN)
+  # Let the Node build read and write real files (replays recorded elsewhere).
+  target_link_options(lockstep PRIVATE -sNODERAWFS=1)
+endif()
 
 include(FetchContent)
 # doctest 2.4.11 still declares cmake_minimum_required(3.0), which CMake 4 rejects
@@ -37,7 +44,7 @@ FetchContent_Declare(doctest
   SYSTEM)
 FetchContent_MakeAvailable(doctest)
 
-add_executable(core_tests tests/test_hash.cpp tests/test_world.cpp tests/test_fixed.cpp tests/test_rng.cpp tests/test_setup.cpp tests/test_combat.cpp)
+add_executable(core_tests tests/test_hash.cpp tests/test_world.cpp tests/test_fixed.cpp tests/test_rng.cpp tests/test_setup.cpp tests/test_combat.cpp tests/test_replay.cpp)
 target_link_libraries(core_tests PRIVATE lockstep_core lockstep_warnings doctest::doctest_with_main)
 
 enable_testing()

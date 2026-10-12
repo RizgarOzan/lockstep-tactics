@@ -13,13 +13,17 @@ overflow.
 > Archer and a Knight each; move and attack orders, hit rolls, cooldowns,
 > simultaneous damage. In 1,000 random matches of 600 ticks, MSVC x64 and
 > WebAssembly reach the same final hash in every one (CI checks this on each
-> push). Not yet: replay files, the desync bisector, rendering.
+> push). A replay recorded under MSVC also verifies tick by tick under
+> WebAssembly, and when two runs disagree the `lockstep` tool names the first
+> tick and the field: it located 100 of 100 injected desyncs exactly.
+> Not yet: rendering.
 
 ## What makes it deterministic
 
-Each rule has a short note on why it exists. Five of them (fixed-point
+Each rule has a short note on why it exists. Six of them (fixed-point
 rounding, the PCG32 output, the command sort, simultaneous damage, hash
-coverage) were broken on purpose once to confirm a test catches it.
+coverage, the bisector's tick) were broken on purpose once to confirm a test
+catches it.
 
 | Rule | Why | Note |
 |---|---|---|
@@ -30,6 +34,7 @@ coverage) were broken on purpose once to confirm a test catches it.
 | Commands sorted on every field | arrival order differs between machines | [04](docs/notes/04-commands-and-combat.md) |
 | Damage applied after everyone acts | unit ids must not decide who dies | [04](docs/notes/04-commands-and-combat.md) |
 | The hash test edits each field in turn | a field missing from the hash is an invisible desync | [03](docs/notes/03-map-and-units.md) |
+| Hash, dump and diff walk one field list | a debug tool that reads other fields than the hash misses desyncs | [05](docs/notes/05-replays-and-the-bisector.md) |
 
 ## How the check works
 
@@ -40,6 +45,16 @@ tools/replay.cpp  ── seed → random orders → step() × 600 → hash()   (
         └── ubuntu-latest, Emscripten  → wasm.txt (run under Node)
                                             │
                               compare job: diff msvc.txt wasm.txt
+
+tools/lockstep.cpp ── MSVC job: record a 600-tick replay (commands + hash per tick)
+                      wasm job: verify it, failing on the first tick that differs
+```
+
+Finding a desync by hand:
+
+```bash
+lockstep verify match.txt          # on the machine that disagrees: "desync at tick 125"
+lockstep dump match.txt 125 > a.txt  # on both machines, then diff a.txt b.txt
 ```
 
 The state hash is FNV-1a over fixed-width integers in little-endian byte
@@ -68,8 +83,8 @@ node build-wasm/replay.js 1000 600
 ## Roadmap
 
 1. ~~One map, three unit types, fixed-point movement and combat, fixed timestep.~~ Done.
-2. Replay files: record inputs, play them back, check the hash every tick.
-3. A desync bisector that names the first differing tick and field.
+2. ~~Replay files: record inputs, play them back, check the hash every tick.~~ Done.
+3. ~~A desync bisector that names the first differing tick and field.~~ Done.
 4. Deliberately risky code paths (an unordered container, float interpolation
    on the render side) to prove the checks catch what they claim to.
 5. raylib rendering, playable in the browser.
