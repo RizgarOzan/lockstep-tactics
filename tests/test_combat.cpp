@@ -1,0 +1,134 @@
+#include <doctest/doctest.h>
+
+#include <algorithm>
+#include <vector>
+
+#include "lockstep/world.hpp"
+
+using namespace lockstep;
+
+namespace {
+
+// An open 16x16 room with walls only on the edge and no units.
+World empty_room() {
+    World w;
+    for (int y = 0; y < Map::kHeight; ++y) {
+        for (int x = 0; x < Map::kWidth; ++x) {
+            const bool edge = x == 0 || y == 0 || x == Map::kWidth - 1 || y == Map::kHeight - 1;
+            w.map.set(x, y, edge ? Tile::Wall : Tile::Floor);
+        }
+    }
+    w.hit_percent = 100;
+    return w;
+}
+
+Fixed centre(int tile) { return Fixed::from_int(tile) + Fixed::from_ratio(1, 2); }
+
+Unit& add_unit(World& w, std::uint8_t owner, UnitType type, int tx, int ty) {
+    const auto id = static_cast<std::uint32_t>(w.units.size() + 1);
+    w.units.push_back(Unit{id, owner, type, stats(type).max_hp, centre(tx), centre(ty)});
+    return w.units.back();
+}
+
+void run(World& w, std::vector<Command> commands, int ticks) {
+    step(w, commands);
+    for (int i = 1; i < ticks; ++i) {
+        step(w, {});
+    }
+}
+
+const Unit* find(const World& w, std::uint32_t id) {
+    for (const Unit& u : w.units) {
+        if (u.id == id) return &u;
+    }
+    return nullptr;
+}
+
+}  // namespace
+
+TEST_CASE("a move order walks at the unit's speed and stops on the tile centre") {
+    World w = empty_room();
+    add_unit(w, 0, UnitType::Soldier, 2, 2);  // speed 1/4 tile per tick
+    run(w, {Command::move(0, 1, 5, 2)}, 1);
+    CHECK(w.units[0].x == centre(2) + Fixed::from_ratio(1, 4));
+    run(w, {}, 20);
+    CHECK(w.units[0].x == centre(5));
+    CHECK(w.units[0].y == centre(2));
+}
+
+TEST_CASE("walls stop movement") {
+    World w = empty_room();
+    w.map.set(4, 2, Tile::Wall);
+    add_unit(w, 0, UnitType::Soldier, 2, 2);
+    run(w, {Command::move(0, 1, 6, 2)}, 40);
+    CHECK((w.units[0].x.raw >> Fixed::kFracBits) == 3);
+}
+
+TEST_CASE("an attack in range deals the attacker's damage, then waits for its cooldown") {
+    World w = empty_room();
+    add_unit(w, 0, UnitType::Soldier, 4, 4);
+    add_unit(w, 1, UnitType::Knight, 5, 4);
+    const std::int32_t after_one_hit = stats(UnitType::Knight).max_hp - stats(UnitType::Soldier).damage;
+    run(w, {Command::attack(0, 1, 2)}, 1);
+    REQUIRE(find(w, 2) != nullptr);
+    CHECK(find(w, 2)->hp == after_one_hit);
+    run(w, {}, kAttackCooldown - 1);
+    REQUIRE(find(w, 2) != nullptr);
+    CHECK(find(w, 2)->hp == after_one_hit);
+    run(w, {}, 1);
+    REQUIRE(find(w, 2) != nullptr);
+    CHECK(find(w, 2)->hp == after_one_hit - stats(UnitType::Soldier).damage);
+}
+
+TEST_CASE("out of range, the attacker walks towards its target") {
+    World w = empty_room();
+    add_unit(w, 0, UnitType::Soldier, 2, 4);
+    add_unit(w, 1, UnitType::Knight, 9, 4);
+    const Fixed before = w.units[0].x;
+    run(w, {Command::attack(0, 1, 2)}, 1);
+    CHECK(w.units[0].x > before);
+}
+
+TEST_CASE("damage is simultaneous: two units that kill each other both die") {
+    World w = empty_room();
+    add_unit(w, 0, UnitType::Soldier, 4, 4).hp = 1;
+    add_unit(w, 1, UnitType::Soldier, 5, 4).hp = 1;
+    run(w, {Command::attack(0, 1, 2), Command::attack(1, 2, 1)}, 1);
+    CHECK(w.units.empty());
+}
+
+TEST_CASE("orders for another player's unit, or a dead one, are ignored") {
+    World w = empty_room();
+    add_unit(w, 0, UnitType::Soldier, 2, 2);
+    run(w, {Command::move(1, 1, 8, 2)}, 5);
+    CHECK(w.units[0].x == centre(2));
+    run(w, {Command::move(0, 99, 8, 2)}, 1);  // no unit 99
+    CHECK(w.units[0].x == centre(2));
+}
+
+TEST_CASE("the order commands arrive in does not matter") {
+    World a = make_world(9), b = make_world(9);
+    // Two orders for unit 1 in one tick: only a total order on commands makes
+    // "the last one wins" the same on every machine.
+    std::vector<Command> commands{Command::move(0, 1, 6, 6), Command::attack(1, 4, 2),
+                                  Command::move(0, 1, 2, 12), Command::move(1, 6, 10, 3)};
+    step(a, commands);
+    std::reverse(commands.begin(), commands.end());
+    step(b, commands);
+    for (int i = 0; i < 50; ++i) {
+        step(a, {});
+        step(b, {});
+    }
+    CHECK(hash(a) == hash(b));
+}
+
+TEST_CASE("misses are drawn from the world RNG, so they replay identically") {
+    World a = empty_room();
+    a.hit_percent = 50;
+    add_unit(a, 0, UnitType::Archer, 3, 4);
+    add_unit(a, 1, UnitType::Knight, 6, 4);
+    World b = a;
+    run(a, {Command::attack(0, 1, 2)}, 200);
+    run(b, {Command::attack(0, 1, 2)}, 200);
+    CHECK(hash(a) == hash(b));
+}
