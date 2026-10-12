@@ -29,7 +29,7 @@ int main(int argc, char** argv) {
     std::vector<lockstep::Input> inputs(2);
     for (std::uint32_t seed = 0; seed < seeds; ++seed) {
         std::uint64_t rng = seed;
-        lockstep::World world;
+        lockstep::World world = lockstep::make_world(seed);
         for (std::uint32_t t = 0; t < ticks; ++t) {
             for (std::uint32_t p = 0; p < inputs.size(); ++p) {
                 inputs[p] = {p, static_cast<std::int32_t>(splitmix64(rng) % 16)};
