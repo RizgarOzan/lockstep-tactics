@@ -1,4 +1,4 @@
-// Runs N seeded matches and prints one line per seed:
+// Runs N seeded matches (Blue random, Orange the AI) and prints one line per seed:
 // "<seed> <final hash> <units left>".
 // CI runs this under MSVC x64 and under WebAssembly (Node) and diffs the two
 // outputs; any differing line is a desync.
@@ -8,7 +8,7 @@
 #include <cstdio>
 #include <cstdlib>
 
-#include "lockstep/random_orders.hpp"
+#include "lockstep/ai.hpp"
 #include "lockstep/world.hpp"
 
 int main(int argc, char** argv) {
@@ -19,7 +19,7 @@ int main(int argc, char** argv) {
         std::uint64_t rng = seed;
         lockstep::World world = lockstep::make_world(seed);
         for (std::uint32_t t = 0; t < ticks; ++t) {
-            lockstep::step(world, lockstep::random_orders(world, rng));
+            lockstep::step(world, lockstep::match_orders(world, rng));
         }
         std::printf("%" PRIu32 " %016" PRIx64 " %zu\n", seed, lockstep::hash(world), world.units.size());
     }

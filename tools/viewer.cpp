@@ -1,45 +1,80 @@
-// Watch seeded matches: map, units, hits, deaths and the state hash. Built
-// only with -DLOCKSTEP_VIEWER=ON; runs natively or in the browser (Emscripten).
+// Watch a match, or play Blue against the AI: board, unit cards, hits,
+// deaths and the live state hash. Built only with -DLOCKSTEP_VIEWER=ON; runs
+// natively or in the browser (Emscripten).
 //
 //   Buttons, or keys: Space pause · R restart · N next seed · Up/Down speed
+//                     P play Blue / watch · S save the replay
+//   Playing: click a blue unit (or its card), then a tile to move or an orange
+//   unit to attack; right click clears the selection. Orders apply on the
+//   next tick, so pausing to think is allowed.
 //   viewer --capture <dir> <seed> <frames> <fps> [ticks/s]   render frames to PNG, hidden window
 //
-// The viewer only reads the World. Hits, attacks and deaths are worked out by
-// comparing two consecutive ticks, and movement is interpolated with float;
-// none of it flows back into the simulation (docs/notes/07-viewer.md).
+// The viewer only reads the World; a player's click becomes an ordinary
+// Command through lockstep::click() (docs/notes/08-player.md). Hits, attacks
+// and deaths are worked out by comparing two consecutive ticks, and movement
+// is interpolated with float; none of it flows back into the simulation
+// (docs/notes/07-viewer.md). Every match is recorded as it plays, so "save"
+// writes a replay that `lockstep verify` checks on any machine.
 #include <cinttypes>
 #include <cstdio>
 #include <cstdlib>
+#include <fstream>
 #include <string>
 #include <vector>
 
+#include "lockstep/ai.hpp"
+#include "lockstep/player.hpp"
 #include "lockstep/random_orders.hpp"
+#include "lockstep/replay.hpp"
 #include "lockstep/world.hpp"
 #include "raylib.h"
 
 #if defined(__EMSCRIPTEN__)
 #include <emscripten/emscripten.h>
+// Hands a text to the browser as a file download.
+EM_JS(void, download_text, (const char* text, const char* name), {
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob([UTF8ToString(text)], {type : 'text/plain'}));
+    a.download = UTF8ToString(name);
+    a.click();
+    URL.revokeObjectURL(a.href);
+});
 #endif
 
 namespace {
 
+// Layout: a top bar, the board, and a panel of unit cards and buttons on the
+// right. Text is drawn at 10 or 20 px only: raylib's default font is a 10 px
+// bitmap, and whole multiples keep it crisp.
 constexpr int kTile = 40;
-constexpr int kHud = 96;
-constexpr int kWidth = lockstep::Map::kWidth * kTile;
-constexpr int kHeight = lockstep::Map::kHeight * kTile + kHud;
+constexpr int kTop = 56;
+constexpr int kBoard = lockstep::Map::kWidth * kTile;
+constexpr int kPanel = 260;
+constexpr int kWidth = kBoard + kPanel;
+constexpr int kHeight = kTop + lockstep::Map::kHeight * kTile;
 constexpr std::uint32_t kMatchTicks = 600;
-constexpr float kEffect = 0.35f;     // seconds a hit flash or attack line lasts
-constexpr float kGhost = 0.8f;       // seconds a dead unit takes to fade
-constexpr float kNextMatch = 3.0f;   // seconds the result stays up
+constexpr float kEffect = 0.35f;    // seconds a hit flash or attack line lasts
+constexpr float kGhost = 0.8f;      // seconds a dead unit takes to fade
+constexpr float kNextMatch = 3.0f;  // seconds a watched result stays up
 
-const Color kBackground{18, 20, 25, 255};
-const Color kFloorA{36, 39, 46, 255};
-const Color kFloorB{40, 43, 51, 255};
-const Color kWall{74, 79, 92, 255};
-const Color kWallTop{98, 104, 120, 255};
+const Color kBackground{16, 17, 21, 255};
+const Color kBar{24, 26, 31, 255};
+const Color kPanelBg{21, 23, 28, 255};
+const Color kCard{30, 33, 40, 255};
+const Color kCardHot{40, 44, 54, 255};
+const Color kFloorA{37, 40, 48, 255};
+const Color kFloorB{41, 44, 53, 255};
+const Color kGrid{30, 32, 39, 255};
+const Color kWall{70, 75, 90, 255};
+const Color kWallTop{104, 110, 128, 255};
+const Color kWallShade{44, 47, 58, 255};
+const Color kText{226, 229, 235, 255};
+const Color kMuted{132, 138, 152, 255};
 const Color kTeam[2] = {Color{86, 156, 230, 255}, Color{236, 128, 82, 255}};
-const Color kTeamDark[2] = {Color{38, 78, 128, 255}, Color{128, 58, 30, 255}};
-const char* kTeamName[2] = {"Blue", "Orange"};
+const Color kTeamDark[2] = {Color{34, 70, 116, 255}, Color{118, 52, 26, 255}};
+const char* kTeamName[2] = {"BLUE", "ORANGE"};
+const char* kTypeName[3] = {"Soldier", "Archer", "Knight"};
+const char* kTypeGlyph[3] = {"S", "A", "K"};
 
 struct Flash {
     std::uint32_t id;
@@ -67,6 +102,10 @@ struct Match {
     float ticks_per_second = 10.0f;
     float over_for = 0.0f;
     bool paused = false;
+    bool human = false;                      // Blue is played by clicks, Orange by the AI
+    std::uint32_t selected = 0;              // Blue's selected unit, 0 for none
+    std::vector<lockstep::Command> pending;  // Blue's orders for the next tick
+    lockstep::Replay replay;                 // the match so far, as `lockstep record` would write it
 
     void start(std::uint64_t s) {
         seed = s;
@@ -77,6 +116,10 @@ struct Match {
         shots.clear();
         ghosts.clear();
         since_tick = over_for = 0.0f;
+        selected = 0;
+        pending.clear();
+        replay = {};
+        replay.seed = s;
     }
 
     int alive(std::uint8_t owner) const {
@@ -93,9 +136,29 @@ struct Match {
         return nullptr;
     }
 
+    // A click on tile (tx, ty) while playing Blue. A newer order for a unit
+    // replaces one still waiting, so what the player clicked last is what
+    // the unit does.
+    void board_click(int tx, int ty) {
+        const lockstep::Click c = lockstep::click(world, 0, selected, tx, ty);
+        selected = c.selected;
+        if (!c.command) return;
+        std::erase_if(pending, [&](const lockstep::Command& p) { return p.unit_id == c.command->unit_id; });
+        pending.push_back(*c.command);
+    }
+
     void tick() {
         before = world.units;
-        lockstep::step(world, lockstep::random_orders(world, orders));
+        std::vector<lockstep::Command> commands = lockstep::match_orders(world, orders);
+        if (human) {
+            std::erase_if(commands, [](const lockstep::Command& c) { return c.player == 0; });
+            commands.insert(commands.end(), pending.begin(), pending.end());
+            pending.clear();
+        }
+        lockstep::step(world, commands);
+        replay.commands.push_back(std::move(commands));
+        replay.hashes.push_back(lockstep::hash(world));
+        if (selected != 0 && !find(world.units, selected)) selected = 0;
         for (const auto& u : world.units) {
             const lockstep::Unit* p = find(before, u.id);
             if (p && u.hp < p->hp) flashes.push_back({u.id, kEffect});
@@ -112,7 +175,7 @@ struct Match {
 
     static Vector2 centre(const lockstep::Unit& u) {
         return {static_cast<float>(u.x.raw) / 65536.0f * kTile,
-                static_cast<float>(u.y.raw) / 65536.0f * kTile + kHud};
+                static_cast<float>(u.y.raw) / 65536.0f * kTile + kTop};
     }
 
     void update(float dt) {
@@ -125,7 +188,8 @@ struct Match {
         if (paused) return;
         if (over()) {
             over_for += dt;
-            if (over_for >= kNextMatch) start(seed + 1);
+            // A watched match moves on by itself; a played one waits for R or N.
+            if (over_for >= kNextMatch && !human) start(seed + 1);
             return;
         }
         since_tick += dt;
@@ -138,6 +202,19 @@ struct Match {
 
 Match match;
 
+// Writes the match so far as a replay file: next to the executable natively,
+// as a download in the browser.
+void save_replay() {
+    const std::string name = "replay-" + std::to_string(match.seed) + ".txt";
+    const std::string text = lockstep::to_text(match.replay);
+#if defined(__EMSCRIPTEN__)
+    download_text(text.c_str(), name.c_str());
+#else
+    std::ofstream(name, std::ios::binary) << text;
+    std::printf("saved %s (%zu ticks)\n", name.c_str(), match.replay.hashes.size());
+#endif
+}
+
 Vector2 drawn_position(const lockstep::Unit& u) {
     const Vector2 now = Match::centre(u);
     const lockstep::Unit* p = Match::find(match.before, u.id);
@@ -148,99 +225,260 @@ Vector2 drawn_position(const lockstep::Unit& u) {
     return {then.x + (now.x - then.x) * t, then.y + (now.y - then.y) * t};
 }
 
+Vector2 tile_centre(int tx, int ty) {
+    return {(static_cast<float>(tx) + 0.5f) * kTile, kTop + (static_cast<float>(ty) + 0.5f) * kTile};
+}
+
+void text(const char* s, int x, int y, int size, Color c) { DrawText(s, x, y, size, c); }
+void text_right(const char* s, int right, int y, int size, Color c) { DrawText(s, right - MeasureText(s, size), y, size, c); }
+void text_centre(const char* s, int cx, int y, int size, Color c) { DrawText(s, cx - MeasureText(s, size) / 2, y, size, c); }
+
+Color hp_colour(float hp) {
+    return hp > 0.5f ? Color{112, 212, 118, 255} : hp > 0.25f ? Color{236, 198, 78, 255} : Color{232, 86, 78, 255};
+}
+
+void hp_bar(int x, int y, int w, int h, float hp) {
+    DrawRectangle(x, y, w, h, Color{10, 11, 13, 255});
+    DrawRectangle(x + 1, y + 1, static_cast<int>(static_cast<float>(w - 2) * hp), h - 2, hp_colour(hp));
+}
+
+// A unit: drop shadow, the type's shape in the team colour, its glyph, and
+// its health underneath. `scale` and `alpha` fade a ghost out.
 void draw_unit(const lockstep::Unit& u, Vector2 at, float alpha, float scale, bool flash) {
     const Color fill = flash ? RAYWHITE : Fade(kTeam[u.owner], alpha);
     const Color edge = Fade(kTeamDark[u.owner], alpha);
-    const float r = kTile * 0.34f * scale;
+    const Color shadow = Fade(BLACK, 0.35f * alpha);
+    const float r = kTile * 0.33f * scale;
+    const int type = static_cast<int>(u.type);
     switch (u.type) {
         case lockstep::UnitType::Soldier:
-            DrawCircleV(at, r + 2, edge);
+            DrawEllipse(static_cast<int>(at.x), static_cast<int>(at.y + r * 0.9f), r * 1.1f, r * 0.45f, shadow);
+            DrawCircleV(at, r + 2.5f, edge);
             DrawCircleV(at, r, fill);
             break;
         case lockstep::UnitType::Archer: {
-            const Vector2 a{at.x, at.y - r - 2}, b{at.x - r - 3, at.y + r * 0.8f + 2}, c{at.x + r + 3, at.y + r * 0.8f + 2};
+            DrawEllipse(static_cast<int>(at.x), static_cast<int>(at.y + r * 0.9f), r * 1.1f, r * 0.45f, shadow);
+            const Vector2 a{at.x, at.y - r - 3}, b{at.x - r - 3.5f, at.y + r * 0.8f + 2.5f}, c{at.x + r + 3.5f, at.y + r * 0.8f + 2.5f};
             DrawTriangle(a, b, c, edge);
             DrawTriangle({at.x, at.y - r + 1}, {at.x - r + 1, at.y + r * 0.8f}, {at.x + r - 1, at.y + r * 0.8f}, fill);
             break;
         }
         case lockstep::UnitType::Knight:
-            DrawRectangleRounded({at.x - r - 2, at.y - r - 2, 2 * r + 4, 2 * r + 4}, 0.3f, 4, edge);
+            DrawRectangleRounded({at.x - r * 1.1f, at.y + r * 0.5f, 2.2f * r, r * 0.9f}, 0.5f, 6, shadow);
+            DrawRectangleRounded({at.x - r - 2.5f, at.y - r - 2.5f, 2 * r + 5, 2 * r + 5}, 0.3f, 4, edge);
             DrawRectangleRounded({at.x - r, at.y - r, 2 * r, 2 * r}, 0.3f, 4, fill);
             break;
     }
     if (alpha >= 1.0f) {
-        const float hp = static_cast<float>(u.hp) / static_cast<float>(lockstep::stats(u.type).max_hp);
-        const Color bar = hp > 0.5f ? Color{120, 220, 120, 255} : hp > 0.25f ? Color{235, 200, 80, 255} : Color{235, 90, 80, 255};
-        DrawRectangle(static_cast<int>(at.x) - 15, static_cast<int>(at.y - r) - 10, 30, 5, Color{12, 12, 14, 255});
-        DrawRectangle(static_cast<int>(at.x) - 15, static_cast<int>(at.y - r) - 10, static_cast<int>(30 * hp), 5, bar);
+        const Color ink = flash ? kTeamDark[u.owner] : Fade(WHITE, 0.92f);
+        text_centre(kTypeGlyph[type], static_cast<int>(at.x) + 1, static_cast<int>(at.y) - 9 + (type == 1 ? 3 : 0), 20, ink);
+        hp_bar(static_cast<int>(at.x) - 14, static_cast<int>(at.y + r) + 6, 28, 5,
+               static_cast<float>(u.hp) / static_cast<float>(lockstep::stats(u.type).max_hp));
+    }
+}
+
+// Where an order points: a diamond on the destination tile, or a ring around
+// the target unit. `alpha` tells an order still waiting from one already given.
+void draw_order(const lockstep::Unit& u, lockstep::Order order, std::int32_t tx, std::int32_t ty,
+                std::uint32_t target_id, float alpha) {
+    const Color c = Fade(kTeam[u.owner], alpha);
+    const Vector2 from = drawn_position(u);
+    if (order == lockstep::Order::Move) {
+        const Vector2 to = tile_centre(tx, ty);
+        DrawLineEx(from, to, 1.5f, Fade(c, 0.5f));
+        DrawPoly(to, 4, kTile * 0.22f, 0.0f, c);
+    } else if (order == lockstep::Order::Attack) {
+        if (const lockstep::Unit* t = Match::find(match.world.units, target_id)) {
+            const Vector2 to = drawn_position(*t);
+            DrawLineEx(from, to, 1.5f, Fade(c, 0.5f));
+            DrawRing(to, kTile * 0.42f, kTile * 0.48f, 0, 360, 24, c);
+        }
+    }
+}
+
+// Selection ring, hovered tile, the selected unit's current order, every
+// waiting order, and a one-line hint. Only while playing Blue.
+void draw_player_layer(Vector2 mouse) {
+    if (!match.human) return;
+    if (mouse.y >= kTop && mouse.x >= 0 && mouse.x < kBoard && mouse.y < kHeight) {
+        const int tx = static_cast<int>(mouse.x / kTile), ty = static_cast<int>((mouse.y - kTop) / kTile);
+        DrawRectangleLinesEx({static_cast<float>(tx * kTile), static_cast<float>(kTop + ty * kTile), kTile, kTile}, 2,
+                             Fade(RAYWHITE, 0.35f));
+    }
+    const lockstep::Unit* sel = Match::find(match.world.units, match.selected);
+    if (sel) {
+        DrawRing(drawn_position(*sel), kTile * 0.44f, kTile * 0.49f, 0, 360, 32, RAYWHITE);
+        draw_order(*sel, sel->order, sel->target_x, sel->target_y, sel->target_id, 0.6f);
+    }
+    for (const auto& p : match.pending) {
+        if (const lockstep::Unit* u = Match::find(match.world.units, p.unit_id)) {
+            draw_order(*u, p.order, p.target_x, p.target_y, p.target_id, 1.0f);
+        }
+    }
+    if (!match.over()) {
+        const char* hint = sel ? "click a tile to move, an orange unit to attack" : "click a blue unit, or its card";
+        DrawRectangle(8, kTop + 8, MeasureText(hint, 10) + 16, 20, Fade(BLACK, 0.6f));
+        text(hint, 16, kTop + 13, 10, kText);
     }
 }
 
 struct Button {
     Rectangle r;
     const char* label;
+    bool primary = false;
 };
 
 bool button(const Button& b, bool clicked, Vector2 mouse) {
     const bool hot = CheckCollisionPointRec(mouse, b.r);
-    DrawRectangleRounded(b.r, 0.35f, 6, hot ? Color{64, 70, 84, 255} : Color{44, 48, 58, 255});
-    const int w = MeasureText(b.label, 16);
-    DrawText(b.label, static_cast<int>(b.r.x + (b.r.width - w) / 2), static_cast<int>(b.r.y + 7), 16, RAYWHITE);
+    const Color face = b.primary ? (hot ? Color{104, 170, 240, 255} : kTeam[0]) : (hot ? kCardHot : kCard);
+    DrawRectangleRounded({b.r.x, b.r.y + 2, b.r.width, b.r.height}, 0.3f, 6, Color{10, 11, 13, 255});
+    DrawRectangleRounded(b.r, 0.3f, 6, face);
+    text_centre(b.label, static_cast<int>(b.r.x + b.r.width / 2), static_cast<int>(b.r.y + (b.r.height - 20) / 2), 20,
+                b.primary ? Color{12, 20, 34, 255} : kText);
     return hot && clicked;
 }
 
-void draw_hud(bool clicked, Vector2 mouse) {
-    DrawRectangle(0, 0, kWidth, kHud, Color{26, 28, 34, 255});
+void draw_top_bar() {
+    DrawRectangle(0, 0, kWidth, kTop, kBar);
+    DrawRectangle(0, kTop - 1, kWidth, 1, Color{40, 43, 52, 255});
+    text("LOCKSTEP", 16, 10, 20, kText);
+    text("TACTICS", 16, 32, 10, kMuted);
     char line[96];
     std::snprintf(line, sizeof line, "seed %" PRIu64, match.seed);
-    DrawText(line, 14, 12, 20, RAYWHITE);
-    for (std::uint8_t t = 0; t < 2; ++t) {
-        const int x = 150 + t * 120;
-        DrawCircle(x, 22, 7, kTeam[t]);
-        std::snprintf(line, sizeof line, "%s %d", kTeamName[t], match.alive(t));
-        DrawText(line, x + 12, 13, 18, LIGHTGRAY);
-    }
-    std::snprintf(line, sizeof line, "hash %016" PRIx64, lockstep::hash(match.world));
-    DrawText(line, kWidth - MeasureText(line, 16) - 14, 15, 16, GRAY);
-
+    text(line, 140, 10, 20, kText);
+    std::snprintf(line, sizeof line, "tick %u / %u", match.world.tick, kMatchTicks);
+    text(line, 140, 34, 10, kMuted);
+    std::snprintf(line, sizeof line, "%016" PRIx64, lockstep::hash(match.world));
+    text_right(line, kWidth - 16, 10, 20, kText);
+    text_right("state hash, FNV-1a over every field", kWidth - 16, 34, 10, kMuted);
     const float progress = static_cast<float>(match.world.tick) / kMatchTicks;
-    DrawRectangle(14, 40, kWidth - 28, 4, Color{44, 48, 58, 255});
-    DrawRectangle(14, 40, static_cast<int>((kWidth - 28) * progress), 4, Color{150, 160, 180, 255});
+    DrawRectangle(300, 24, 220, 4, Color{40, 43, 52, 255});
+    DrawRectangle(300, 24, static_cast<int>(220 * progress), 4, Color{150, 160, 180, 255});
+    if (match.paused) text_centre("PAUSED", 410, 34, 10, kMuted);
+    else if (match.human) text_centre("you are Blue", 410, 34, 10, kTeam[0]);
+    else text_centre("random vs AI", 410, 34, 10, kMuted);
+}
 
+void draw_board() {
+    for (int y = 0; y < lockstep::Map::kHeight; ++y) {
+        for (int x = 0; x < lockstep::Map::kWidth; ++x) {
+            const int px = x * kTile, py = kTop + y * kTile;
+            if (match.world.map.at(x, y) == lockstep::Tile::Wall) {
+                DrawRectangle(px, py, kTile, kTile, kWall);
+                DrawRectangle(px, py, kTile, 6, kWallTop);
+                DrawRectangle(px, py + kTile - 4, kTile, 4, kWallShade);
+                // A wall above an open tile throws a little shadow on it.
+                if (y + 1 < lockstep::Map::kHeight && match.world.map.at(x, y + 1) == lockstep::Tile::Floor) {
+                    DrawRectangle(px, py + kTile, kTile, 5, Fade(BLACK, 0.25f));
+                }
+            } else {
+                DrawRectangle(px, py, kTile, kTile, (x + y) % 2 ? kFloorA : kFloorB);
+                DrawRectangle(px, py, kTile, 1, kGrid);
+                DrawRectangle(px, py, 1, kTile, kGrid);
+            }
+        }
+    }
+}
+
+// One unit card: glyph, name, health and what the unit is doing. Returns
+// whether it was clicked.
+bool unit_card(const lockstep::Unit& u, int x, int y, bool selected, bool clicked, Vector2 mouse) {
+    const Rectangle r{static_cast<float>(x), static_cast<float>(y), kPanel - 32, 44};
+    const bool hot = match.human && u.owner == 0 && CheckCollisionPointRec(mouse, r);
+    DrawRectangleRounded(r, 0.2f, 4, hot ? kCardHot : kCard);
+    if (selected) DrawRectangleRoundedLinesEx(r, 0.2f, 4, 2, RAYWHITE);
+    DrawRectangle(x, y + 6, 3, 32, kTeam[u.owner]);
+    DrawCircle(x + 24, y + 22, 13, kTeamDark[u.owner]);
+    DrawCircle(x + 24, y + 22, 11, kTeam[u.owner]);
+    text_centre(kTypeGlyph[static_cast<int>(u.type)], x + 25, y + 12, 20, Fade(WHITE, 0.92f));
+    text(kTypeName[static_cast<int>(u.type)], x + 46, y + 7, 20, kText);
+    char line[48];
+    std::snprintf(line, sizeof line, "%d/%d", u.hp, lockstep::stats(u.type).max_hp);
+    text_right(line, x + kPanel - 40, y + 9, 10, kMuted);
+    hp_bar(x + 46, y + 29, 90, 6, static_cast<float>(u.hp) / static_cast<float>(lockstep::stats(u.type).max_hp));
+    const char* doing = "idle";
+    if (u.order == lockstep::Order::Move) {
+        std::snprintf(line, sizeof line, "to %d,%d", u.target_x, u.target_y);
+        doing = line;
+    } else if (u.order == lockstep::Order::Attack) {
+        const lockstep::Unit* t = Match::find(match.world.units, u.target_id);
+        if (t) {
+            if (u.cooldown > 0) std::snprintf(line, sizeof line, "%s, %u", kTypeName[static_cast<int>(t->type)], u.cooldown);
+            else std::snprintf(line, sizeof line, "%s", kTypeName[static_cast<int>(t->type)]);
+            doing = line;
+        }
+    }
+    text_right(doing, x + kPanel - 40, y + 28, 10, kMuted);
+    return hot && clicked;
+}
+
+// Returns whether `clicked` was left for the board.
+bool draw_panel(bool clicked, Vector2 mouse) {
+    DrawRectangle(kBoard, kTop, kPanel, kHeight - kTop, kPanelBg);
+    DrawRectangle(kBoard, kTop, 1, kHeight - kTop, Color{40, 43, 52, 255});
+    const int x = kBoard + 16;
+    int y = kTop + 14;
+    char line[64];
+    for (std::uint8_t team = 0; team < 2; ++team) {
+        text(kTeamName[team], x, y, 10, kTeam[team]);
+        std::snprintf(line, sizeof line, "%d left", match.alive(team));
+        text_right(line, x + kPanel - 32, y, 10, kMuted);
+        y += 16;
+        int shown = 0;
+        for (const auto& u : match.world.units) {
+            if (u.owner != team) continue;
+            if (unit_card(u, x, y, match.human && u.id == match.selected, clicked, mouse)) {
+                match.selected = u.id;
+                clicked = false;
+            }
+            y += 50;
+            ++shown;
+        }
+        for (; shown < 3; ++shown) {
+            DrawRectangleRoundedLinesEx({static_cast<float>(x), static_cast<float>(y), kPanel - 32, 44}, 0.2f, 4, 1,
+                                        Color{40, 43, 52, 255});
+            text_centre("fallen", x + (kPanel - 32) / 2, y + 17, 10, Color{70, 74, 86, 255});
+            y += 50;
+        }
+        y += 10;
+    }
+
+    const float bw = (kPanel - 32 - 8) / 2.0f;
     char speed[16];
     std::snprintf(speed, sizeof speed, "speed x%g", match.ticks_per_second / 10.0f);
-    const Button pause{{14, 54, 96, 30}, match.paused ? "play" : "pause"};
-    const Button restart{{118, 54, 96, 30}, "restart"};
-    const Button next{{222, 54, 96, 30}, "next seed"};
-    const Button faster{{326, 54, 110, 30}, speed};
+    const auto at = [&](int col, int row) {
+        return Rectangle{static_cast<float>(x) + static_cast<float>(col) * (bw + 8), static_cast<float>(y + row * 40), bw, 32};
+    };
+    const Button pause{at(0, 0), match.paused ? "play" : "pause"};
+    const Button restart{at(1, 0), "restart"};
+    const Button next{at(0, 1), "next seed"};
+    const Button faster{at(1, 1), speed};
+    const Button mode{at(0, 2), match.human ? "watch" : "play Blue", !match.human};
+    const Button save{at(1, 2), "save"};
     if (button(pause, clicked, mouse)) match.paused = !match.paused;
     if (button(restart, clicked, mouse)) match.start(match.seed);
     if (button(next, clicked, mouse)) match.start(match.seed + 1);
     if (button(faster, clicked, mouse)) match.ticks_per_second = match.ticks_per_second >= 40.0f ? 5.0f : match.ticks_per_second * 2.0f;
-    std::snprintf(line, sizeof line, "tick %u / %u", match.world.tick, kMatchTicks);
-    DrawText(line, kWidth - MeasureText(line, 16) - 14, 62, 16, GRAY);
+    if (button(mode, clicked, mouse)) match.human = !match.human;
+    if (button(save, clicked, mouse)) save_replay();
+    y += 3 * 40 + 6;
+    text("Soldier beats Archer beats Knight", x, y, 10, kMuted);
+    text("beats Soldier. Archers shoot 4 tiles.", x, y + 14, 10, kMuted);
+    text("space pause  n next  r restart", x, y + 34, 10, Color{80, 85, 98, 255});
+    text("up/down speed  p play  s save", x, y + 48, 10, Color{80, 85, 98, 255});
 #if defined(LOCKSTEP_DEBUG_INPUT)
     static int presses = 0;
     presses += clicked;
-    std::snprintf(line, sizeof line, "DBG mouse %.0f,%.0f down %d touch %d presses %d", mouse.x, mouse.y,
+    std::snprintf(line, sizeof line, "DBG %.0f,%.0f down %d touch %d presses %d", mouse.x, mouse.y,
                   IsMouseButtonDown(MOUSE_BUTTON_LEFT), GetTouchPointCount(), presses);
-    DrawText(line, 14, kHud - 12, 10, YELLOW);
+    text(line, x, kHeight - 16, 10, YELLOW);
 #endif
+    return clicked && mouse.x < kBoard && mouse.y >= kTop;
 }
 
 void draw(bool clicked, Vector2 mouse) {
     ClearBackground(kBackground);
-    for (int y = 0; y < lockstep::Map::kHeight; ++y) {
-        for (int x = 0; x < lockstep::Map::kWidth; ++x) {
-            const int px = x * kTile, py = kHud + y * kTile;
-            if (match.world.map.at(x, y) == lockstep::Tile::Wall) {
-                DrawRectangle(px, py, kTile, kTile, kWall);
-                DrawRectangle(px, py, kTile, 5, kWallTop);
-            } else {
-                DrawRectangle(px, py, kTile, kTile, (x + y) % 2 ? kFloorA : kFloorB);
-            }
-        }
-    }
+    draw_board();
     for (const auto& g : match.ghosts) {
         const float t = g.left / kGhost;
         draw_unit(g.unit, Match::centre(g.unit), t * 0.8f, 0.6f + 0.4f * t, false);
@@ -253,14 +491,24 @@ void draw(bool clicked, Vector2 mouse) {
         for (const auto& f : match.flashes) flash |= f.id == u.id && f.left > kEffect * 0.5f;
         draw_unit(u, drawn_position(u), 1.0f, 1.0f, flash);
     }
+    draw_player_layer(mouse);
     if (match.over()) {
         const int a = match.alive(0), b = match.alive(1);
-        const char* text = a == b ? "Draw" : a > b ? "Blue wins" : "Orange wins";
+        const char* line = a == b ? "DRAW" : a > b ? "BLUE WINS" : "ORANGE WINS";
         const Color c = a == b ? RAYWHITE : kTeam[a > b ? 0 : 1];
-        DrawRectangle(0, kHud + 260, kWidth, 80, Fade(BLACK, 0.6f));
-        DrawText(text, (kWidth - MeasureText(text, 36)) / 2, kHud + 280, 36, c);
+        DrawRectangle(0, kTop + 270, kBoard, 100, Fade(BLACK, 0.7f));
+        DrawRectangle(0, kTop + 270, kBoard, 2, c);
+        text_centre(line, kBoard / 2, kTop + 294, 40, c);
+        char sub[64];
+        std::snprintf(sub, sizeof sub, "tick %u  -  %s", match.world.tick,
+                      match.human ? "restart or next seed to play again" : "next match in a moment");
+        text_centre(sub, kBoard / 2, kTop + 344, 10, kMuted);
     }
-    draw_hud(clicked, mouse);
+    draw_top_bar();
+    // The panel takes the click first; what it does not use is a board click.
+    if (draw_panel(clicked, mouse) && match.human && !match.over()) {
+        match.board_click(static_cast<int>(mouse.x / kTile), static_cast<int>((mouse.y - kTop) / kTile));
+    }
 }
 
 void frame() {
@@ -269,6 +517,9 @@ void frame() {
     if (IsKeyPressed(KEY_R)) match.start(match.seed);
     if (IsKeyPressed(KEY_UP) && match.ticks_per_second < 40.0f) match.ticks_per_second *= 2.0f;
     if (IsKeyPressed(KEY_DOWN) && match.ticks_per_second > 5.0f) match.ticks_per_second /= 2.0f;
+    if (IsKeyPressed(KEY_P)) match.human = !match.human;
+    if (IsKeyPressed(KEY_S)) save_replay();
+    if (IsMouseButtonPressed(MOUSE_BUTTON_RIGHT)) match.selected = 0;
     match.update(GetFrameTime());
     // A press is the frame the pointer goes down, whether it is a mouse button
     // or a finger. raylib's web backend maps a touch to the mouse *position*
