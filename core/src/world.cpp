@@ -60,6 +60,33 @@ World make_world(std::uint64_t seed) {
         }
     }
 
+    // Fill every floor tile the spawns cannot reach, so no unit can be sent
+    // into a pocket and no target can hide in one. A flood fill, no random
+    // draws, so the one-draw-per-tile rule above still holds.
+    std::array<bool, Map::kWidth * Map::kHeight> seen{};
+    std::array<std::int16_t, Map::kWidth * Map::kHeight> queue{};
+    std::size_t head = 0, tail = 0;
+    seen[static_cast<std::size_t>(kSpawnRow[0] * Map::kWidth + kSpawnColumn[0])] = true;
+    queue[tail++] = static_cast<std::int16_t>(kSpawnRow[0] * Map::kWidth + kSpawnColumn[0]);
+    while (head < tail) {
+        const int at = queue[head++];
+        const int x = at % Map::kWidth, y = at / Map::kWidth;
+        constexpr int kDx[4] = {0, -1, 1, 0}, kDy[4] = {-1, 0, 0, 1};
+        for (int n = 0; n < 4; ++n) {
+            const int nx = x + kDx[n], ny = y + kDy[n];
+            if (world.map.at(nx, ny) != Tile::Floor) continue;
+            auto& s = seen[static_cast<std::size_t>(ny * Map::kWidth + nx)];
+            if (s) continue;
+            s = true;
+            queue[tail++] = static_cast<std::int16_t>(ny * Map::kWidth + nx);
+        }
+    }
+    for (int y = 0; y < Map::kHeight; ++y) {
+        for (int x = 0; x < Map::kWidth; ++x) {
+            if (!seen[static_cast<std::size_t>(y * Map::kWidth + x)]) world.map.set(x, y, Tile::Wall);
+        }
+    }
+
     std::uint32_t next_id = 1;
     for (std::uint8_t owner = 0; owner < 2; ++owner) {
         for (int t = 0; t < 3; ++t) {
@@ -189,15 +216,27 @@ void stride(const Map& map, Unit& u, Fixed tx, Fixed ty) {
 
 // Walks towards (tx, ty) along the shortest path over floor tiles: this
 // tick's stride goes to the centre of the next tile on it, or straight at
-// the target once on its tile. A target that cannot be reached (a wall, or
-// a pocket) falls back to the straight line, which at worst stands still.
-void walk(const Map& map, Unit& u, Fixed tx, Fixed ty) {
-    const int sx = tile_of(u.x), sy = tile_of(u.y);
-    if (const auto next = next_step(map, sx, sy, tile_of(tx), tile_of(ty))) {
+// the target once on its tile. Other units' tiles count as walls, except
+// the goal tile, so an attacker still closes in on its target; it stops
+// short of entering a goal tile someone else stands on. A target that
+// cannot be reached falls back to the straight line, which at worst stands
+// still.
+void walk(const World& world, Unit& u, Fixed tx, Fixed ty) {
+    const int sx = tile_of(u.x), sy = tile_of(u.y), gx = tile_of(tx), gy = tile_of(ty);
+    Map blocked = world.map;
+    bool goal_taken = false;
+    for (const Unit& o : world.units) {
+        if (o.id == u.id) continue;
+        const int ox = tile_of(o.x), oy = tile_of(o.y);
+        if (ox == gx && oy == gy) goal_taken = true;
+        else blocked.set(ox, oy, Tile::Wall);
+    }
+    if (const auto next = next_step(blocked, sx, sy, gx, gy)) {
         tx = tile_centre(next->first);
         ty = tile_centre(next->second);
     }
-    stride(map, u, tx, ty);
+    if (goal_taken && (sx != gx || sy != gy)) blocked.set(gx, gy, Tile::Wall);
+    stride(blocked, u, tx, ty);
 }
 
 struct Hit {
@@ -243,7 +282,7 @@ void step(World& world, std::span<const Command> commands) {
         Unit& u = *unit;
         if (u.cooldown > 0) --u.cooldown;
         if (u.order == Order::Move) {
-            walk(world.map, u, Fixed::from_int(u.target_x) + Fixed::from_ratio(1, 2),
+            walk(world, u, Fixed::from_int(u.target_x) + Fixed::from_ratio(1, 2),
                  Fixed::from_int(u.target_y) + Fixed::from_ratio(1, 2));
         } else if (u.order == Order::Attack) {
             const Unit* target = find_unit(world.units, u.target_id);
@@ -257,7 +296,7 @@ void step(World& world, std::span<const Command> commands) {
             const bool in_range = dx * dx + dy * dy <= range * range &&
                                   line_of_sight(world.map, tile_of(u.x), tile_of(u.y), tile_of(target->x), tile_of(target->y));
             if (!in_range) {
-                walk(world.map, u, target->x, target->y);
+                walk(world, u, target->x, target->y);
             } else if (u.cooldown == 0) {
                 if (world.rng.below(100) < world.hit_percent) {
                     hits.push_back({target->id, damage(u.type, target->type)});

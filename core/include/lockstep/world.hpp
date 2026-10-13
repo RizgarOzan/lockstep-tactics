@@ -79,6 +79,9 @@ struct Command {
     }
 };
 
+// Units block each other: a tile holds one unit, and a path treats other
+// units' tiles as walls (except the tile it is heading for, so an attacker
+// can still close in on its target).
 struct World {
     std::uint32_t tick = 0;
     Map map;
@@ -90,7 +93,8 @@ struct World {
 };
 
 // Walls around the edge, random interior walls, both spawn columns clear,
-// and one unit of each type per player.
+// every floor tile reachable from the spawns (pockets are filled in), and
+// one unit of each type per player.
 World make_world(std::uint64_t seed);
 
 // The first tile of the shortest walk from (sx, sy) to (gx, gy) over floor

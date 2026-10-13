@@ -97,6 +97,32 @@ TEST_CASE("a wall between archer and target is cover: no shot, the archer walks 
     CHECK(line_of_sight(w.map, 8, 8, 9, 3));
 }
 
+TEST_CASE("two units never share a tile: the one behind waits or goes round") {
+    World w = empty_room();
+    for (int y = 1; y <= 14; ++y) {
+        if (y != 5) w.map.set(6, y, Tile::Wall);  // a wall with one gap at (6,5)
+    }
+    add_unit(w, 0, UnitType::Knight, 5, 5);   // id 1, slow, parked in front of the gap
+    add_unit(w, 0, UnitType::Soldier, 3, 5);  // id 2, fast, wants through
+    run(w, {Command::move(0, 2, 6, 5)}, 40);
+    // The Knight has no order and stays at (5,5); the Soldier cannot pass it.
+    const Unit* s = find(w, 2);
+    REQUIRE(s != nullptr);
+    CHECK((s->x.raw >> Fixed::kFracBits) <= 4);
+    // Give the Knight room and the Soldier gets through.
+    run(w, {Command::move(0, 1, 9, 5)}, 60);
+    s = find(w, 2);
+    CHECK((s->x.raw >> Fixed::kFracBits) == 6);
+    for (const Unit& a : w.units) {
+        for (const Unit& b : w.units) {
+            if (a.id < b.id) {
+                CHECK(((a.x.raw >> Fixed::kFracBits) != (b.x.raw >> Fixed::kFracBits) ||
+                       (a.y.raw >> Fixed::kFracBits) != (b.y.raw >> Fixed::kFracBits)));
+            }
+        }
+    }
+}
+
 TEST_CASE("an attacker walks round a wall to reach its target") {
     World w = empty_room();
     for (int y = 1; y <= 6; ++y) w.map.set(7, y, Tile::Wall);

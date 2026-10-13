@@ -28,6 +28,19 @@ TEST_CASE("the map is closed by walls and the spawn columns are clear") {
     }
 }
 
+TEST_CASE("every floor tile can be reached from both spawns") {
+    for (std::uint64_t seed = 0; seed < 200; ++seed) {
+        const World w = make_world(seed);
+        for (int y = 1; y < Map::kHeight - 1; ++y) {
+            for (int x = 1; x < Map::kWidth - 1; ++x) {
+                if (w.map.at(x, y) != Tile::Floor) continue;
+                if (!(x == 1 && y == 5)) REQUIRE(next_step(w.map, 1, 5, x, y).has_value());
+                if (!(x == Map::kWidth - 2 && y == 5)) REQUIRE(next_step(w.map, Map::kWidth - 2, 5, x, y).has_value());
+            }
+        }
+    }
+}
+
 TEST_CASE("each player gets one unit of each type, at full health, on floor") {
     const World w = make_world(4);
     REQUIRE(w.units.size() == 6);
