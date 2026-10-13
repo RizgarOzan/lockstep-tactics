@@ -75,15 +75,32 @@ TEST_CASE("a wounded enemy is preferred over a healthy one") {
     CHECK(ai_orders(w, 1)[0].target_id == 3);
 }
 
-TEST_CASE("an Archer on cooldown steps away from a melee unit next to it") {
+TEST_CASE("an Archer keeps two tiles between itself and a melee unit") {
     World w = room();
-    add(w, 1, UnitType::Archer, 8, 8).cooldown = 5;
-    add(w, 0, UnitType::Soldier, 8, 9);
-    const auto orders = ai_orders(w, 1);
+    add(w, 1, UnitType::Archer, 8, 8).cooldown = 6;  // just shot
+    add(w, 0, UnitType::Knight, 8, 10);              // two tiles: too close
+    auto orders = ai_orders(w, 1);
     REQUIRE(orders.size() == 1);
     CHECK(orders[0].order == Order::Move);
-    CHECK(orders[0].target_x == 8);
-    CHECK(orders[0].target_y == 7);
+    CHECK(orders[0].target_y == 7);  // straight away, the farthest neighbour
+    // With the shot ready it shoots first.
+    w.units[0].cooldown = 0;
+    orders = ai_orders(w, 1);
+    REQUIRE(orders.size() == 1);
+    CHECK(orders[0].order == Order::Attack);
+    w.units[0].cooldown = 6;
+    // Three tiles away it shoots instead.
+    w.units[1].y = Fixed::from_int(11) + Fixed::from_ratio(1, 2);
+    orders = ai_orders(w, 1);
+    REQUIRE(orders.size() == 1);
+    CHECK(orders[0].order == Order::Attack);
+    // Cornered against a wall it has nowhere farther to go and fights.
+    World c = room();
+    add(c, 1, UnitType::Archer, 1, 1).cooldown = 6;
+    add(c, 0, UnitType::Knight, 2, 2);
+    orders = ai_orders(c, 1);
+    REQUIRE(orders.size() == 1);
+    CHECK(orders[0].order == Order::Attack);
 }
 
 TEST_CASE("the whole side converges on one target") {

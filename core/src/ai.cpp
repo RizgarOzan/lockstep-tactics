@@ -1,5 +1,8 @@
 #include "lockstep/ai.hpp"
 
+#include <optional>
+#include <utility>
+
 namespace lockstep {
 
 namespace {
@@ -21,7 +24,30 @@ int matchup(UnitType a, UnitType b) {
     return 0;
 }
 
-int sign(std::int32_t v) { return v > 0 ? 1 : v < 0 ? -1 : 0; }
+// The neighbouring floor tile farthest from `from`, if any is farther than
+// where `u` stands. Eight neighbours in a fixed order; the first best wins.
+std::optional<std::pair<int, int>> step_away(const Map& map, const Unit& u, const Unit& from) {
+    const int ux = tile_of(u.x), uy = tile_of(u.y), fx = tile_of(from.x), fy = tile_of(from.y);
+    std::optional<std::pair<int, int>> best;
+    std::int64_t best_d = static_cast<std::int64_t>(ux - fx) * (ux - fx) + static_cast<std::int64_t>(uy - fy) * (uy - fy);
+    for (int dy = -1; dy <= 1; ++dy) {
+        for (int dx = -1; dx <= 1; ++dx) {
+            if (dx == 0 && dy == 0) continue;
+            const int x = ux + dx, y = uy + dy;
+            if (x <= 0 || y <= 0 || x >= Map::kWidth - 1 || y >= Map::kHeight - 1) continue;
+            if (map.at(x, y) != Tile::Floor) continue;
+            // A diagonal step needs both orthogonal neighbours open, or the
+            // walk would slide along a wall instead of moving away.
+            if (dx != 0 && dy != 0 && (map.at(ux + dx, uy) != Tile::Floor || map.at(ux, uy + dy) != Tile::Floor)) continue;
+            const std::int64_t d = static_cast<std::int64_t>(x - fx) * (x - fx) + static_cast<std::int64_t>(y - fy) * (y - fy);
+            if (d > best_d) {
+                best_d = d;
+                best = std::make_pair(x, y);
+            }
+        }
+    }
+    return best;
+}
 
 bool can_hit(const World& w, const Unit& u, const Unit& e) {
     const std::int64_t r = stats(u.type).range.raw >> Fixed::kFracBits;
@@ -81,15 +107,15 @@ std::vector<Command> ai_orders(const World& w, std::uint32_t player) {
             }
         }
 
-        // An Archer with a melee unit on top of it and no shot ready steps
-        // back one tile; it shoots again the moment the cooldown ends.
-        if (u.type == UnitType::Archer && u.cooldown > 0 && near <= 1 && nearest->type != UnitType::Archer) {
-            const int tx = tile_of(u.x) + sign(u.x.raw - nearest->x.raw);
-            const int ty = tile_of(u.y) + sign(u.y.raw - nearest->y.raw);
-            const bool inside = tx > 0 && ty > 0 && tx < Map::kWidth - 1 && ty < Map::kHeight - 1;
-            if (inside && w.map.at(tx, ty) == Tile::Floor && (tx != tile_of(u.x) || ty != tile_of(u.y))) {
-                if (u.order != Order::Move || u.target_x != tx || u.target_y != ty) {
-                    out.push_back(Command::move(player, u.id, tx, ty));
+        // An Archer keeps its distance: with a melee unit inside two tiles it
+        // shoots if the shot is ready, otherwise it spends the cooldown
+        // stepping to whichever neighbouring tile is farthest from that unit.
+        // Its range is four, so the step back rarely costs it the next shot;
+        // it still loses to a Soldier, which is faster, and that is the matchup.
+        if (u.type == UnitType::Archer && u.cooldown > 0 && near <= 4 && nearest->type != UnitType::Archer) {
+            if (const auto away = step_away(w.map, u, *nearest)) {
+                if (u.order != Order::Move || u.target_x != away->first || u.target_y != away->second) {
+                    out.push_back(Command::move(player, u.id, away->first, away->second));
                 }
                 continue;
             }
