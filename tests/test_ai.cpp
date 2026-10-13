@@ -75,15 +75,82 @@ TEST_CASE("a wounded enemy is preferred over a healthy one") {
     CHECK(ai_orders(w, 1)[0].target_id == 3);
 }
 
-TEST_CASE("an Archer on cooldown steps away from a melee unit next to it") {
+TEST_CASE("an Archer keeps two tiles between itself and a melee unit") {
     World w = room();
-    add(w, 1, UnitType::Archer, 8, 8).cooldown = 5;
-    add(w, 0, UnitType::Soldier, 8, 9);
-    const auto orders = ai_orders(w, 1);
+    add(w, 1, UnitType::Archer, 8, 8).cooldown = 6;  // just shot
+    add(w, 0, UnitType::Knight, 8, 10);              // two tiles: too close
+    auto orders = ai_orders(w, 1);
     REQUIRE(orders.size() == 1);
     CHECK(orders[0].order == Order::Move);
-    CHECK(orders[0].target_x == 8);
-    CHECK(orders[0].target_y == 7);
+    CHECK(orders[0].target_y == 7);  // straight away, the farthest neighbour
+    // With the shot ready it shoots first.
+    w.units[0].cooldown = 0;
+    orders = ai_orders(w, 1);
+    REQUIRE(orders.size() == 1);
+    CHECK(orders[0].order == Order::Attack);
+    w.units[0].cooldown = 6;
+    // Three tiles away it shoots instead.
+    w.units[1].y = Fixed::from_int(11) + Fixed::from_ratio(1, 2);
+    orders = ai_orders(w, 1);
+    REQUIRE(orders.size() == 1);
+    CHECK(orders[0].order == Order::Attack);
+    // Cornered against a wall it has nowhere farther to go and fights.
+    World c = room();
+    add(c, 1, UnitType::Archer, 1, 1).cooldown = 6;
+    add(c, 0, UnitType::Knight, 2, 2);
+    orders = ai_orders(c, 1);
+    REQUIRE(orders.size() == 1);
+    CHECK(orders[0].order == Order::Attack);
+}
+
+TEST_CASE("the whole side converges on one target") {
+    World w = room();
+    add(w, 1, UnitType::Soldier, 8, 8);
+    add(w, 1, UnitType::Knight, 8, 9);
+    add(w, 1, UnitType::Archer, 8, 10);
+    add(w, 0, UnitType::Knight, 3, 8).hp = 4;  // wounded, four tiles short of the far one
+    add(w, 0, UnitType::Knight, 13, 9);
+    const auto orders = ai_orders(w, 1);
+    REQUIRE(orders.size() == 3);
+    for (const Command& c : orders) {
+        CHECK(c.order == Order::Attack);
+        CHECK(c.target_id == 4);
+    }
+}
+
+TEST_CASE("a unit far ahead of its slowest teammate waits, then moves on") {
+    World w = room();
+    add(w, 1, UnitType::Soldier, 9, 8);  // id 1: close to the enemy
+    add(w, 1, UnitType::Knight, 2, 8);   // id 2: seven tiles behind
+    add(w, 0, UnitType::Knight, 13, 8);  // id 3: the enemy
+    auto orders = ai_orders(w, 1);
+    REQUIRE(orders.size() == 2);
+    CHECK(orders[0].unit_id == 1);
+    CHECK(orders[0].order == Order::Move);  // holds its own tile
+    CHECK(orders[0].target_x == 9);
+    CHECK(orders[0].target_y == 8);
+    CHECK(orders[1].unit_id == 2);
+    CHECK(orders[1].order == Order::Attack);
+    step(w, orders);
+    CHECK(ai_orders(w, 1).empty());  // holding is stable, no order spam
+    // Once the Knight is close enough the Soldier is released.
+    w.units[1].x = Fixed::from_int(8) + Fixed::from_ratio(1, 2);
+    orders = ai_orders(w, 1);
+    REQUIRE(orders.size() == 1);
+    CHECK(orders[0].unit_id == 1);
+    CHECK(orders[0].order == Order::Attack);
+}
+
+TEST_CASE("an enemy already in reach is fought rather than walked away from") {
+    World w = room();
+    add(w, 1, UnitType::Soldier, 8, 8);  // id 1
+    add(w, 1, UnitType::Soldier, 8, 9);  // id 2
+    add(w, 0, UnitType::Knight, 9, 8);   // id 3: adjacent to id 1
+    add(w, 0, UnitType::Archer, 8, 12).hp = 1;  // id 4: the team focus, four tiles off
+    const auto orders = ai_orders(w, 1);
+    REQUIRE(orders.size() == 2);
+    CHECK(orders[0].target_id == 3);  // id 1 hits what is next to it
+    CHECK(orders[1].target_id == 4);  // id 2 has nothing in reach and goes for the focus
 }
 
 TEST_CASE("the matchup bonus goes one way round the triangle") {

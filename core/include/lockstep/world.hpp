@@ -4,7 +4,9 @@
 // the CI comparison need goes through these names.
 #include <array>
 #include <cstdint>
+#include <optional>
 #include <span>
+#include <utility>
 #include <vector>
 
 #include "lockstep/fixed.hpp"
@@ -77,6 +79,9 @@ struct Command {
     }
 };
 
+// Units block each other: a tile holds one unit, and a path treats other
+// units' tiles as walls (except the tile it is heading for, so an attacker
+// can still close in on its target).
 struct World {
     std::uint32_t tick = 0;
     Map map;
@@ -88,8 +93,20 @@ struct World {
 };
 
 // Walls around the edge, random interior walls, both spawn columns clear,
-// and one unit of each type per player.
+// every floor tile reachable from the spawns (pockets are filled in), and
+// one unit of each type per player.
 World make_world(std::uint64_t seed);
+
+// The first tile of the shortest walk from (sx, sy) to (gx, gy) over floor
+// tiles, four-connected, or nothing when the goal cannot be reached. Ties
+// are broken in a fixed neighbour order, so every machine picks the same
+// tile. Units walk one of these steps per tick.
+std::optional<std::pair<int, int>> next_step(const Map& map, int sx, int sy, int gx, int gy);
+
+// Whether no wall tile lies on the straight line between the two tiles
+// (Bresenham over tile centres, end tiles not counted). Attacks need it as
+// well as range, so a wall is cover, not just an obstacle.
+bool line_of_sight(const Map& map, int x0, int y0, int x1, int y1);
 
 // One tick: apply this tick's commands (in player, then unit id order,
 // whatever order they arrived in), move and attack in unit id order, then
