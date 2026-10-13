@@ -22,10 +22,13 @@ match.
 | | matches that differ from the normal build |
 |---|---|
 | MSVC | 0 / 1000 |
-| gcc (libstdc++) | 881 / 1000 |
-| Emscripten (libc++) | 860 / 1000 |
+| gcc (libstdc++) | 995 / 1000 |
+| Emscripten (libc++) | 996 / 1000 |
 
-gcc and Emscripten also differ from each other in 249 matches.
+gcc and Emscripten also differ from each other in 299 matches. (First
+measured on the simpler simulation as 881, 860 and 249; the numbers above
+are from after note 11, when units path, block and need line of sight, so
+a different turn order changes more.)
 
 The surprise is MSVC: its `unordered_map` keeps elements in a list in
 insertion order, and with six small keys and no rehash, iteration comes out
@@ -42,7 +45,7 @@ The CI pair (MSVC vs WebAssembly) would have flagged 860 of 1,000 matches.
 | | matches that differ |
 |---|---|
 | MSVC vs gcc vs Emscripten | 0 / 1000 for every pair |
-| gcc with `-mfma -ffp-contract=fast` vs plain gcc | **12 / 1000** |
+| gcc with `-mfma -ffp-contract=fast` vs plain gcc | **4 / 1000** (12 before note 11) |
 | *fixed-point build* with the same flags vs normal | 0 / 1000 |
 
 On these three targets, float was deterministic. That is expected and not a
@@ -53,8 +56,9 @@ and clang, keep `-ffp-contract` off).
 
 One flag changes that. With `-mfma -ffp-contract=fast` gcc is allowed to fuse
 multiply and add into one instruction with a single rounding; the object file
-then contains 3 FMA instructions (0 without the flag), and 12 of 1,000
-matches end differently. The fixed-point build, compiled with the same flags,
+then contains FMA instructions (none without the flag), and 4 of 1,000
+matches end differently (12 on the simpler simulation; paths now decide
+most of a walk, so the float stride has less to get wrong). The fixed-point build, compiled with the same flags,
 does not move: there is no float arithmetic for the flag to change. So the
 rule in note 01 is not about these three compilers today; it is about the
 build flag, the compiler upgrade or the ARM target that has not been added

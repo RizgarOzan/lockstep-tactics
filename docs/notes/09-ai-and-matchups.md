@@ -16,19 +16,33 @@ replay hash moved; the commit says so.
 
 ## The AI
 
-Each tick, for each of its units, the AI scores every enemy with integers
-only:
+Integers only, every tick, from the `World` alone. The first version scored
+every enemy per unit (`distance² − 12 × matchup + hp`) and sent each unit
+at its own best; note 11 measured that against scripted opponents and it
+lost to a ten-line focus-fire script. The AI as it stands now:
 
-```
-score = distance²(tiles) − 12 × matchup + enemy hp     (lower is better)
-```
+1. **One focus for the side.** Every enemy is scored for the team: the sum
+   over our units of `distance² − 12 × matchup`, plus the enemy's health
+   times our unit count. The lowest is the focus and everyone converges on
+   it, so damage lands on one unit at a time. Ties go to the lower id,
+   which is the order units are stored in.
+2. **Fight what is already in reach.** A unit with an enemy inside its range
+   and in line of sight attacks that one (best matchup, then most wounded)
+   rather than walking away from it to join the focus.
+3. **Nobody charges in alone.** A unit more than five tiles² ahead of its
+   slowest teammate, measured towards the focus, holds its own tile until
+   the gap is under three tiles². Two thresholds, so it does not flap
+   between orders; the hold is a Move to its own tile, which is also how
+   the AI recognises its own holding state without keeping any.
+4. **Archers shoot, then step back.** With a melee unit inside two tiles an
+   Archer shoots if the shot is ready and otherwise spends the cooldown
+   stepping to the neighbouring floor tile farthest from that unit
+   (diagonals only when both sides are open). Cornered, it fights. The
+   version that retreated regardless of cooldown lost shots and ground
+   against every opponent, so it went.
 
-so the closest enemy wins unless a better matchup or a wounded target is
-within about three tiles. Ties go to the lower id, which is the order units
-are stored in. An Archer that has a melee unit on the next tile and no shot
-ready steps one tile away first, then shoots when the cooldown ends. An
-order is only emitted when it changes what the unit is already doing, so a
-600-tick replay does not fill with repeats.
+An order is only emitted when it changes what the unit is already doing,
+so a 600-tick replay does not fill with repeats.
 
 No random numbers and no `float`: the same `World` gives the same orders on
 every machine. That matters because the AI's commands go into the replay
@@ -38,23 +52,24 @@ covers the AI as well as the simulation.
 
 ## Measured
 
-`arena 1000 600`, Blue random against Orange the AI:
+`arena 1000 600`, Blue random against Orange the AI: **995 / 1000** (was 978
+before the five steps in note 11), mean match length 114 ticks. Random
+orders are a weak yardstick, so the probe in note 11 also plays four
+scripted opponents; the table there is the honest one (focus fire 738-257,
+the AI against itself 546-439 with one timeout).
 
-| | wins |
-|---|---|
-| AI (Orange) | 978 / 1000 |
-| random (Blue) | 21 / 1000 |
-| draw | 1 / 1000 |
+`tests/test_ai.cpp` asserts a floor of 70 % over 200 seeds against random,
+well under the measurement, so a balance tweak does not break the build
+over a few seeds; it also pins the team focus, the in-reach rule, the hold
+and release thresholds, the Archer's stutter step, the matchup choice, the
+wounded-target choice, and that a second call on the same world repeats
+nothing.
 
-Mean match length 107 ticks. The same numbers come out of the WebAssembly
-build. `tests/test_ai.cpp` asserts a floor of 70 % over 200 seeds, well
-under the measurement, so a balance tweak does not break the build over a
-few seeds; it also pins the matchup choice, the wounded-target choice, the
-Archer's step back and that a second call on the same world repeats nothing.
-
-**What it is not.** No pathfinding (units slide along walls, note 04), no
-group tactics, no look-ahead. It is enough to punish a player who sends an
-Archer into a Soldier, and simple enough to read in one sitting.
+**What it is not.** No look-ahead, no retreat when outnumbered, no use of
+the walls as cover on purpose, no stepping aside for a teammate in a
+corridor. It is enough to beat the obvious scripts and to punish a player
+who sends an Archer into a Soldier, and it is still short enough to read in
+one sitting.
 
 **Questions this answers in an interview**
 - Why must the AI be deterministic if it is not part of the simulation?

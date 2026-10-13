@@ -9,7 +9,7 @@ live state hash on screen and a *save* button that writes a replay any
 machine can verify.
 
 <p align="center">
-  <img src="docs/media/match.gif" width="720" alt="Seed 1: random Blue against the AI. Orange focuses one blue unit at a time, the unit cards on the right show health and what each unit is doing, and Orange wins at tick 68; the state hash in the top right updates every tick">
+  <img src="docs/media/match.gif" width="720" alt="Seed 1: random Blue against the AI. Orange advances together, walks round the walls, focuses one blue unit at a time while its Archer shoots and steps back; the unit cards on the right show health and what each unit is doing, and Orange wins at tick 118; the state hash in the top right updates every tick">
 </p>
 <p align="center"><sub>Seed 1 at 2× speed, random Blue against the AI, rendered headless by <code>viewer --capture</code>.</sub></p>
 
@@ -23,8 +23,12 @@ overflow.
 > **Status: playable.** Two players, a 16×16 map, a Soldier, an Archer and a
 > Knight each; move and attack orders, hit rolls, cooldowns, simultaneous
 > damage, and a matchup triangle (Soldier beats Archer beats Knight beats
-> Soldier). A deterministic AI plays Orange and beats the random player in
-> 978 of 1,000 matches; you can play Blue against it in the browser, or play
+> Soldier), shortest-path movement, walls as cover and one unit per tile. A
+> deterministic AI plays Orange with one focus for the whole side, a hold for
+> slow teammates and Archers that shoot and step back; it beats the random
+> player in 995 of 1,000 matches and a focus-fire script 738 to 257
+> ([note 11](docs/notes/11-paths-cover-and-bodies.md) has it against five
+> opponents). You can play Blue against it in the browser, or play
 > another person: two browsers run the match in lockstep over a WebRTC data
 > channel, three ticks ahead, comparing hashes as they go. In 1,000
 > seeded matches of 600 ticks, MSVC x64, Apple clang arm64 and WebAssembly
@@ -54,16 +58,21 @@ catches it.
 | A click becomes a `Command` for the next tick | input enters the state only through `step()` | [08](docs/notes/08-player.md) |
 | The AI uses integers only and emits only changes | its commands are in the replay too | [09](docs/notes/09-ai-and-matchups.md) |
 | Online, a tick runs when both sides' orders for it are in | orders scheduled three ticks ahead; frames carry the last hash | [10](docs/notes/10-two-browsers.md) |
+| Paths by BFS with a fixed tie order; cover by integer Bresenham | the same tile and the same shot on every machine | [11](docs/notes/11-paths-cover-and-bodies.md) |
+| Pockets filled by a flood fill that draws no random numbers | map generation keeps one draw per tile | [11](docs/notes/11-paths-cover-and-bodies.md) |
 
 Three of these rules were also broken in a whole build (`-DLOCKSTEP_RISKY=unordered|float|size_t`,
 [note 06](docs/notes/06-breaking-it-on-purpose.md)), 1,000 matches each:
 
 | Broken build | MSVC | gcc | WebAssembly |
 |---|---|---|---|
-| units act in `unordered_map` order | 0 differ | 881 differ | 860 differ |
+| units act in `unordered_map` order | 0 differ | 995 differ | 996 differ |
 | movement in `float` | same on all three | | |
-| `float` + gcc `-mfma -ffp-contract=fast` | | 12 differ | |
+| `float` + gcc `-mfma -ffp-contract=fast` | | 4 differ | |
 | a `size_t` in the state hash | same as gcc | | 1000 differ, from tick 1 |
+
+(Re-measured after the simulation changes in note 11; the first round, on the
+simpler simulation, read 881, 860 and 12.)
 
 MSVC's `unordered_map` happened to iterate in id order here, so that bug only
 shows on the other two compilers. Float was deterministic on all three targets
@@ -83,12 +92,13 @@ Write-up of these two experiments:
   compilers. The point is not that fixed-point is clever; it is that the
   claim "bit-identical" is checked on every push, across compilers, with
   replays that any machine can verify.
-- **… a smarter AI?** The one here (note 09) is a scoring rule in integers:
-  closest enemy, minus a bonus for a winning matchup, plus the enemy's
-  remaining health, and Archers step back from melee. It wins 978 of 1,000
-  against random orders and loses to a person who reads the triangle. Its
-  job is to make the demo a game and to put a second order source into the
-  replays; search and pathfinding would not change what the repo measures.
+- **… a smarter AI?** The one here (note 09) is a few integer rules: one
+  focus for the side, fight what is in reach, wait for the slow teammate,
+  Archers shoot and step back. Note 11 shows what measuring it against
+  scripted opponents found and fixed, most of it in the simulation rather
+  than the AI (no paths, no cover, no bodies). It still has no look-ahead
+  and no retreat; its job is to make the demo a game and to put a second
+  order source into the replays.
 - **… an engine's netcode (Unity Netcode, Godot, Photon)?** Those give you
   state synchronisation; they do not give you a simulation that is the same
   everywhere, and they cannot be dropped into a browser tab. This is the
@@ -178,7 +188,9 @@ same `lockstep::Lockstep` class, with no sockets in it, is what
 6. ~~Touch controls for the browser page, and a real player instead of random orders.~~ Done ([note 08](docs/notes/08-player.md)).
 7. ~~An opponent worth playing, and a reason to pick one unit over another.~~ Done: the AI and the matchup triangle ([note 09](docs/notes/09-ai-and-matchups.md)).
 8. ~~A second human: two browsers exchanging commands over a relay, with the same replay format as proof.~~ Done ([note 10](docs/notes/10-two-browsers.md)).
-9. Rollback on top of the same frames, so an order lands on the tick it was given instead of three later.
+9. ~~Shortest paths, line of sight, one unit per tile, and an AI that focuses, waits for its slow units and kites.~~ Done ([note 11](docs/notes/11-paths-cover-and-bodies.md)).
+10. Rollback on top of the same frames, so an order lands on the tick it was given instead of three later.
+11. Fairness: with the same AI on both sides Orange wins more, because lower ids act first within a tick.
 
 ## Contributing
 
@@ -188,8 +200,9 @@ Good first changes, each small enough for one pull request:
   equal keys, signed overflow, a `double` in the AI's scoring) with its
   measured numbers added to the table above;
 - a fourth CI target (gcc on Linux arm64, or MSVC x86) in `determinism.yml`;
-- a stronger AI in `core/src/ai.cpp` that still uses integers only; the
-  arena number in the README should move and `ctest` must stay green;
+- a stronger AI in `core/src/ai.cpp` that still uses integers only: a unit
+  that steps aside for a teammate in a corridor, or a retreat when
+  outnumbered; measure it against the five opponents in note 11;
 - a third unit type, with its row in the matchup table and in the tests;
 - a TURN fallback or a different signalling relay for the online mode, kept
   behind the same `?relay=` parameter.
