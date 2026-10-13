@@ -109,6 +109,20 @@ Write-up of these two experiments:
   actually deterministic, and where did it stop being so", is what the replay
   format and the bisector here answer.
 
+## How fast
+
+`bench` times `step()` on recorded orders and leaves the input generator
+out. Before pathfinding a tick cost 64–89 ns on this laptop across gcc,
+MSVC and WebAssembly, after the three per-tick heap allocations were
+removed (it was 1.8–2.7× slower before that, and until then WebAssembly
+was the fastest build, most likely because its allocator is single-threaded).
+The shortest-path walk in [note 11](docs/notes/11-paths-cover-and-bodies.md)
+runs a breadth-first search per moving unit per tick and now dominates:
+about 1.85 µs per tick under gcc, 600 ticks in a millisecond, which is fine
+for a game at ten ticks a second and the obvious next thing to optimise.
+Method, numbers and the fix: [note 12](docs/notes/12-benchmark.md). The
+benchmark does not run in CI on purpose; shared runners are not a clock.
+
 ## How the check works
 
 ```
@@ -146,6 +160,7 @@ cmake --build build
 ctest --test-dir build
 build/replay 1000 600     # one hash per seed, what CI diffs between compilers
 build/arena 1000 600      # AI vs random: who won
+build/bench 200 600 50    # ns per tick: min, median, max over 50 repeats
 ```
 
 WebAssembly, with the Emscripten SDK active:
@@ -189,8 +204,9 @@ same `lockstep::Lockstep` class, with no sockets in it, is what
 7. ~~An opponent worth playing, and a reason to pick one unit over another.~~ Done: the AI and the matchup triangle ([note 09](docs/notes/09-ai-and-matchups.md)).
 8. ~~A second human: two browsers exchanging commands over a relay, with the same replay format as proof.~~ Done ([note 10](docs/notes/10-two-browsers.md)).
 9. ~~Shortest paths, line of sight, one unit per tile, and an AI that focuses, waits for its slow units and kites.~~ Done ([note 11](docs/notes/11-paths-cover-and-bodies.md)).
-10. Rollback on top of the same frames, so an order lands on the tick it was given instead of three later.
-11. Fairness: with the same AI on both sides Orange wins more, because lower ids act first within a tick.
+10. ~~A benchmark of the step alone, and the first optimisation it pointed at.~~ Done ([note 12](docs/notes/12-benchmark.md)).
+11. Rollback on top of the same frames, so an order lands on the tick it was given instead of three later.
+12. Fairness: with the same AI on both sides Orange wins more, because lower ids act first within a tick.
 
 ## Contributing
 

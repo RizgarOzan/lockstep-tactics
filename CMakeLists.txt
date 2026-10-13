@@ -39,6 +39,8 @@ endif()
 add_executable(replay tools/replay.cpp)
 target_link_libraries(replay PRIVATE lockstep_core lockstep_warnings)
 
+add_executable(bench tools/bench.cpp)
+target_link_libraries(bench PRIVATE lockstep_core lockstep_warnings)
 add_executable(arena tools/arena.cpp)
 target_link_libraries(arena PRIVATE lockstep_core lockstep_warnings)
 
