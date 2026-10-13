@@ -71,6 +71,51 @@ World make_world(std::uint64_t seed) {
     return world;
 }
 
+std::optional<std::pair<int, int>> next_step(const Map& map, int sx, int sy, int gx, int gy) {
+    if (sx == gx && sy == gy) return std::nullopt;
+    if (map.at(gx, gy) != Tile::Floor) return std::nullopt;
+    // Breadth-first from the goal, so every tile ends up with its distance
+    // to the goal and the start just picks the lowest neighbour. Neighbours
+    // are visited up, left, right, down; the first equal distance wins.
+    constexpr int kUnreached = 0x7fff;
+    std::array<std::int16_t, Map::kWidth * Map::kHeight> dist;
+    dist.fill(kUnreached);
+    std::array<std::int16_t, Map::kWidth * Map::kHeight> queue{};
+    std::size_t head = 0, tail = 0;
+    const auto index = [](int x, int y) { return y * Map::kWidth + x; };
+    dist[static_cast<std::size_t>(index(gx, gy))] = 0;
+    queue[tail++] = static_cast<std::int16_t>(index(gx, gy));
+    constexpr int kDx[4] = {0, -1, 1, 0};
+    constexpr int kDy[4] = {-1, 0, 0, 1};
+    while (head < tail) {
+        const int at = queue[head++];
+        const int x = at % Map::kWidth, y = at / Map::kWidth;
+        if (x == sx && y == sy) break;
+        for (int n = 0; n < 4; ++n) {
+            const int nx = x + kDx[n], ny = y + kDy[n];
+            if (nx < 0 || ny < 0 || nx >= Map::kWidth || ny >= Map::kHeight) continue;
+            if (map.at(nx, ny) != Tile::Floor) continue;
+            auto& d = dist[static_cast<std::size_t>(index(nx, ny))];
+            if (d != kUnreached) continue;
+            d = static_cast<std::int16_t>(dist[static_cast<std::size_t>(at)] + 1);
+            queue[tail++] = static_cast<std::int16_t>(index(nx, ny));
+        }
+    }
+    if (dist[static_cast<std::size_t>(index(sx, sy))] == kUnreached) return std::nullopt;
+    std::optional<std::pair<int, int>> best;
+    int best_d = kUnreached;
+    for (int n = 0; n < 4; ++n) {
+        const int nx = sx + kDx[n], ny = sy + kDy[n];
+        if (nx < 0 || ny < 0 || nx >= Map::kWidth || ny >= Map::kHeight) continue;
+        const int d = dist[static_cast<std::size_t>(index(nx, ny))];
+        if (d < best_d) {
+            best_d = d;
+            best = std::make_pair(nx, ny);
+        }
+    }
+    return best;
+}
+
 namespace {
 
 Unit* find_unit(std::vector<Unit>& units, std::uint32_t id) {
@@ -88,7 +133,7 @@ int tile_of(Fixed v) { return v.raw >> Fixed::kFracBits; }
 Fixed to_fixed(float v) { return Fixed::from_raw(static_cast<std::int32_t>(std::lround(v * 65536.0f))); }
 float to_float(Fixed v) { return static_cast<float>(v.raw) / 65536.0f; }
 
-void walk(const Map& map, Unit& u, Fixed tx, Fixed ty) {
+void stride(const Map& map, Unit& u, Fixed tx, Fixed ty) {
     const float speed = to_float(stats(u.type).speed);
     float dx = to_float(tx) - to_float(u.x);
     float dy = to_float(ty) - to_float(u.y);
@@ -111,7 +156,7 @@ Fixed approach(Fixed pos, Fixed target, Fixed speed) {
 }
 
 // One axis at a time, so a wall ahead on x still lets the unit slide on y.
-void walk(const Map& map, Unit& u, Fixed tx, Fixed ty) {
+void stride(const Map& map, Unit& u, Fixed tx, Fixed ty) {
     const Fixed speed = stats(u.type).speed;
     const Fixed nx = approach(u.x, tx, speed);
     if (map.at(tile_of(nx), tile_of(u.y)) == Tile::Floor) u.x = nx;
@@ -119,6 +164,19 @@ void walk(const Map& map, Unit& u, Fixed tx, Fixed ty) {
     if (map.at(tile_of(u.x), tile_of(ny)) == Tile::Floor) u.y = ny;
 }
 #endif
+
+// Walks towards (tx, ty) along the shortest path over floor tiles: this
+// tick's stride goes to the centre of the next tile on it, or straight at
+// the target once on its tile. A target that cannot be reached (a wall, or
+// a pocket) falls back to the straight line, which at worst stands still.
+void walk(const Map& map, Unit& u, Fixed tx, Fixed ty) {
+    const int sx = tile_of(u.x), sy = tile_of(u.y);
+    if (const auto next = next_step(map, sx, sy, tile_of(tx), tile_of(ty))) {
+        tx = tile_centre(next->first);
+        ty = tile_centre(next->second);
+    }
+    stride(map, u, tx, ty);
+}
 
 struct Hit {
     std::uint32_t target_id;

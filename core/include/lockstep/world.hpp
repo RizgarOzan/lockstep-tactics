@@ -4,7 +4,9 @@
 // the CI comparison need goes through these names.
 #include <array>
 #include <cstdint>
+#include <optional>
 #include <span>
+#include <utility>
 #include <vector>
 
 #include "lockstep/fixed.hpp"
@@ -90,6 +92,12 @@ struct World {
 // Walls around the edge, random interior walls, both spawn columns clear,
 // and one unit of each type per player.
 World make_world(std::uint64_t seed);
+
+// The first tile of the shortest walk from (sx, sy) to (gx, gy) over floor
+// tiles, four-connected, or nothing when the goal cannot be reached. Ties
+// are broken in a fixed neighbour order, so every machine picks the same
+// tile. Units walk one of these steps per tick.
+std::optional<std::pair<int, int>> next_step(const Map& map, int sx, int sy, int gx, int gy);
 
 // One tick: apply this tick's commands (in player, then unit id order,
 // whatever order they arrived in), move and attack in unit id order, then
