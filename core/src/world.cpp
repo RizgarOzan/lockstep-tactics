@@ -116,6 +116,28 @@ std::optional<std::pair<int, int>> next_step(const Map& map, int sx, int sy, int
     return best;
 }
 
+bool line_of_sight(const Map& map, int x0, int y0, int x1, int y1) {
+    // Integer Bresenham: the same tiles on every machine, no float, and
+    // symmetric enough for a game (a line is checked from the attacker's end).
+    int dx = x1 > x0 ? x1 - x0 : x0 - x1, dy = y1 > y0 ? y1 - y0 : y0 - y1;
+    const int sx = x0 < x1 ? 1 : -1, sy = y0 < y1 ? 1 : -1;
+    int err = dx - dy;
+    int x = x0, y = y0;
+    while (true) {
+        if (x == x1 && y == y1) return true;
+        const int e2 = 2 * err;
+        if (e2 > -dy) {
+            err -= dy;
+            x += sx;
+        }
+        if (e2 < dx) {
+            err += dx;
+            y += sy;
+        }
+        if ((x != x1 || y != y1) && map.at(x, y) == Tile::Wall) return false;
+    }
+}
+
 namespace {
 
 Unit* find_unit(std::vector<Unit>& units, std::uint32_t id) {
@@ -232,7 +254,9 @@ void step(World& world, std::span<const Command> commands) {
             const Fixed dx = target->x - u.x;
             const Fixed dy = target->y - u.y;
             const Fixed range = stats(u.type).range;
-            if (dx * dx + dy * dy > range * range) {
+            const bool in_range = dx * dx + dy * dy <= range * range &&
+                                  line_of_sight(world.map, tile_of(u.x), tile_of(u.y), tile_of(target->x), tile_of(target->y));
+            if (!in_range) {
                 walk(world.map, u, target->x, target->y);
             } else if (u.cooldown == 0) {
                 if (world.rng.below(100) < world.hit_percent) {

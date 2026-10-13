@@ -83,6 +83,20 @@ TEST_CASE("next_step takes the shortest way round and refuses the unreachable") 
     CHECK_FALSE(next_step(w.map, 2, 2, 8, 8).has_value());
 }
 
+TEST_CASE("a wall between archer and target is cover: no shot, the archer walks round") {
+    World w = empty_room();
+    for (int y = 1; y <= 6; ++y) w.map.set(7, y, Tile::Wall);
+    add_unit(w, 0, UnitType::Archer, 5, 3);  // range 4: (9,3) is in range by distance alone
+    add_unit(w, 1, UnitType::Knight, 9, 3);
+    run(w, {Command::attack(0, 1, 2)}, 1);
+    CHECK(find(w, 2)->hp == stats(UnitType::Knight).max_hp);
+    // It started walking round (right or down are equally short), not standing still.
+    CHECK((w.units[0].x > centre(5) || w.units[0].y > centre(3)));
+    CHECK_FALSE(line_of_sight(w.map, 5, 3, 9, 3));
+    CHECK(line_of_sight(w.map, 5, 3, 5, 8));
+    CHECK(line_of_sight(w.map, 8, 8, 9, 3));
+}
+
 TEST_CASE("an attacker walks round a wall to reach its target") {
     World w = empty_room();
     for (int y = 1; y <= 6; ++y) w.map.set(7, y, Tile::Wall);

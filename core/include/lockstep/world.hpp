@@ -99,6 +99,11 @@ World make_world(std::uint64_t seed);
 // tile. Units walk one of these steps per tick.
 std::optional<std::pair<int, int>> next_step(const Map& map, int sx, int sy, int gx, int gy);
 
+// Whether no wall tile lies on the straight line between the two tiles
+// (Bresenham over tile centres, end tiles not counted). Attacks need it as
+// well as range, so a wall is cover, not just an obstacle.
+bool line_of_sight(const Map& map, int x0, int y0, int x1, int y1);
+
 // One tick: apply this tick's commands (in player, then unit id order,
 // whatever order they arrived in), move and attack in unit id order, then
 // apply all damage at once and remove the dead.
