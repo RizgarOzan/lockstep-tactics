@@ -86,6 +86,56 @@ TEST_CASE("an Archer on cooldown steps away from a melee unit next to it") {
     CHECK(orders[0].target_y == 7);
 }
 
+TEST_CASE("the whole side converges on one target") {
+    World w = room();
+    add(w, 1, UnitType::Soldier, 8, 8);
+    add(w, 1, UnitType::Knight, 8, 9);
+    add(w, 1, UnitType::Archer, 8, 10);
+    add(w, 0, UnitType::Knight, 3, 8).hp = 4;  // wounded, four tiles short of the far one
+    add(w, 0, UnitType::Knight, 13, 9);
+    const auto orders = ai_orders(w, 1);
+    REQUIRE(orders.size() == 3);
+    for (const Command& c : orders) {
+        CHECK(c.order == Order::Attack);
+        CHECK(c.target_id == 4);
+    }
+}
+
+TEST_CASE("a unit far ahead of its slowest teammate waits, then moves on") {
+    World w = room();
+    add(w, 1, UnitType::Soldier, 9, 8);  // id 1: close to the enemy
+    add(w, 1, UnitType::Knight, 2, 8);   // id 2: seven tiles behind
+    add(w, 0, UnitType::Knight, 13, 8);  // id 3: the enemy
+    auto orders = ai_orders(w, 1);
+    REQUIRE(orders.size() == 2);
+    CHECK(orders[0].unit_id == 1);
+    CHECK(orders[0].order == Order::Move);  // holds its own tile
+    CHECK(orders[0].target_x == 9);
+    CHECK(orders[0].target_y == 8);
+    CHECK(orders[1].unit_id == 2);
+    CHECK(orders[1].order == Order::Attack);
+    step(w, orders);
+    CHECK(ai_orders(w, 1).empty());  // holding is stable, no order spam
+    // Once the Knight is close enough the Soldier is released.
+    w.units[1].x = Fixed::from_int(8) + Fixed::from_ratio(1, 2);
+    orders = ai_orders(w, 1);
+    REQUIRE(orders.size() == 1);
+    CHECK(orders[0].unit_id == 1);
+    CHECK(orders[0].order == Order::Attack);
+}
+
+TEST_CASE("an enemy already in reach is fought rather than walked away from") {
+    World w = room();
+    add(w, 1, UnitType::Soldier, 8, 8);  // id 1
+    add(w, 1, UnitType::Soldier, 8, 9);  // id 2
+    add(w, 0, UnitType::Knight, 9, 8);   // id 3: adjacent to id 1
+    add(w, 0, UnitType::Archer, 8, 12).hp = 1;  // id 4: the team focus, four tiles off
+    const auto orders = ai_orders(w, 1);
+    REQUIRE(orders.size() == 2);
+    CHECK(orders[0].target_id == 3);  // id 1 hits what is next to it
+    CHECK(orders[1].target_id == 4);  // id 2 has nothing in reach and goes for the focus
+}
+
 TEST_CASE("the matchup bonus goes one way round the triangle") {
     CHECK(damage(UnitType::Soldier, UnitType::Archer) > stats(UnitType::Soldier).damage);
     CHECK(damage(UnitType::Archer, UnitType::Knight) > stats(UnitType::Archer).damage);
