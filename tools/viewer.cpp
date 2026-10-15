@@ -317,20 +317,45 @@ void draw_unit(const lockstep::Unit& u, Vector2 at, float alpha, float scale, bo
     }
 }
 
+// The tiles a unit will walk to reach (gx, gy): the same next_step() the
+// simulation uses, with the other units as walls, followed tile by tile
+// until the goal or 40 steps. Drawn as dots, so the detour round a wall is
+// visible before the unit takes it. Read-only; nothing here touches the World.
+void draw_path(const lockstep::Unit& u, int gx, int gy, Color c) {
+    lockstep::Map blocked = match.world.map;
+    for (const auto& o : match.world.units) {
+        const int ox = o.x.raw >> lockstep::Fixed::kFracBits, oy = o.y.raw >> lockstep::Fixed::kFracBits;
+        if (o.id != u.id && (ox != gx || oy != gy)) blocked.set(ox, oy, lockstep::Tile::Wall);
+    }
+    int x = u.x.raw >> lockstep::Fixed::kFracBits, y = u.y.raw >> lockstep::Fixed::kFracBits;
+    if (lockstep::line_clear(blocked, x, y, gx, gy)) return;  // a straight walk needs no dots
+    for (int i = 0; i < 40; ++i) {
+        const auto next = lockstep::next_step(blocked, x, y, gx, gy);
+        if (!next) break;
+        x = next->first;
+        y = next->second;
+        if (x == gx && y == gy) break;
+        DrawCircleV(tile_centre(x, y), 3.0f, Fade(c, 0.55f));
+    }
+}
+
 // Where an order points: a diamond on the destination tile, or a ring around
-// the target unit. `alpha` tells an order still waiting from one already given.
+// the target unit, with the path there dotted. `alpha` tells an order still
+// waiting from one already given.
 void draw_order(const lockstep::Unit& u, lockstep::Order order, std::int32_t tx, std::int32_t ty,
                 std::uint32_t target_id, float alpha) {
     const Color c = Fade(kTeam[u.owner], alpha);
     const Vector2 from = drawn_position(u);
     if (order == lockstep::Order::Move) {
         const Vector2 to = tile_centre(tx, ty);
-        DrawLineEx(from, to, 1.5f, Fade(c, 0.5f));
+        DrawLineEx(from, to, 1.5f, Fade(c, 0.3f));
+        draw_path(u, tx, ty, c);
         DrawPoly(to, 4, kTile * 0.22f, 0.0f, c);
     } else if (order == lockstep::Order::Attack) {
         if (const lockstep::Unit* t = Match::find(match.world.units, target_id)) {
             const Vector2 to = drawn_position(*t);
-            DrawLineEx(from, to, 1.5f, Fade(c, 0.5f));
+            DrawLineEx(from, to, 1.5f, Fade(c, 0.3f));
+            draw_path(u, t->x.raw >> lockstep::Fixed::kFracBits, t->y.raw >> lockstep::Fixed::kFracBits, c);
             DrawRing(to, kTile * 0.42f, kTile * 0.48f, 0, 360, 24, c);
         }
     }
@@ -339,12 +364,19 @@ void draw_order(const lockstep::Unit& u, lockstep::Order order, std::int32_t tx,
 // Selection ring, hovered tile, the selected unit's current order, every
 // waiting order, and a one-line hint. Only while playing Blue.
 void draw_player_layer(Vector2 mouse) {
-    if (!match.human) return;
+    // Hovering any unit, in either mode, shows its order and the path it will
+    // take: the AI's intentions are readable the same way the player's are.
     if (mouse.y >= kTop && mouse.x >= 0 && mouse.x < kBoard && mouse.y < kHeight) {
         const int tx = static_cast<int>(mouse.x / kTile), ty = static_cast<int>((mouse.y - kTop) / kTile);
-        DrawRectangleLinesEx({static_cast<float>(tx * kTile), static_cast<float>(kTop + ty * kTile), kTile, kTile}, 2,
-                             Fade(RAYWHITE, 0.35f));
+        if (const lockstep::Unit* h = lockstep::unit_at(match.world, tx, ty)) {
+            if (h->id != match.selected) draw_order(*h, h->order, h->target_x, h->target_y, h->target_id, 0.5f);
+        }
+        if (match.human) {
+            DrawRectangleLinesEx({static_cast<float>(tx * kTile), static_cast<float>(kTop + ty * kTile), kTile, kTile}, 2,
+                                 Fade(RAYWHITE, 0.35f));
+        }
     }
+    if (!match.human) return;
     const lockstep::Unit* sel = Match::find(match.world.units, match.selected);
     if (sel) {
         DrawRing(drawn_position(*sel), kTile * 0.44f, kTile * 0.49f, 0, 360, 32, RAYWHITE);
