@@ -153,6 +153,30 @@ TEST_CASE("an enemy already in reach is fought rather than walked away from") {
     CHECK(orders[1].target_id == 4);  // id 2 has nothing in reach and goes for the focus
 }
 
+TEST_CASE("two teammates meeting head-on in a gap: one steps aside") {
+    // A wall across the room with a one-tile gap at (8,5); a Soldier on each
+    // side of the gap, each wanting through, each blocking the other.
+    World w = room();
+    for (int y = 1; y <= 14; ++y) {
+        if (y != 5) w.map.set(8, y, Tile::Wall);
+    }
+    add(w, 1, UnitType::Soldier, 7, 5);  // id 1, heading east to the enemy
+    add(w, 1, UnitType::Soldier, 9, 5);  // id 2, parked in front of it, heading west
+    add(w, 0, UnitType::Knight, 13, 5);  // id 3: the enemy, east
+    add(w, 0, UnitType::Knight, 2, 9);   // id 4
+    w.units[0].order = Order::Attack;
+    w.units[0].target_id = 3;
+    w.units[1].order = Order::Attack;
+    w.units[1].target_id = 4;  // id 2 wants west, through id 1's tile
+    // Head-on only if both are walking into each other; both are.
+    const auto orders = ai_orders(w, 1);
+    bool stepped = false;
+    for (const Command& c : orders) {
+        if (c.order == Order::Move && (c.target_x != 7 || c.target_y != 5) && (c.target_x != 9 || c.target_y != 5)) stepped = true;
+    }
+    CHECK(stepped);
+}
+
 TEST_CASE("the matchup bonus goes one way round the triangle") {
     CHECK(damage(UnitType::Soldier, UnitType::Archer) > stats(UnitType::Soldier).damage);
     CHECK(damage(UnitType::Archer, UnitType::Knight) > stats(UnitType::Archer).damage);
