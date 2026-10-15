@@ -158,6 +158,42 @@ TEST_CASE("out of range, the attacker walks towards its target") {
     CHECK(w.units[0].x > before);
 }
 
+TEST_CASE("acting first in a tick buys nothing: two equal units meet on the same tick") {
+    // Blue id 1 and Orange id 2 are both Soldiers, three tiles apart, each
+    // ordered at the other. Before the fix id 1 moved first and id 2 then
+    // measured range against the new position, so one side struck a tick
+    // early. Both must take their first hit on the same tick.
+    World w = empty_room();
+    add_unit(w, 0, UnitType::Soldier, 4, 6);
+    add_unit(w, 1, UnitType::Soldier, 9, 6);
+    run(w, {Command::attack(0, 1, 2), Command::attack(1, 2, 1)}, 1);
+    for (int t = 0; t < 60; ++t) {
+        const std::int32_t a = find(w, 1)->hp, b = find(w, 2)->hp;
+        CHECK(a == b);
+        if (a < stats(UnitType::Soldier).max_hp) break;
+        step(w, {});
+    }
+    CHECK(find(w, 1)->hp < stats(UnitType::Soldier).max_hp);
+}
+
+TEST_CASE("a clear straight line is walked straight, diagonally") {
+    World w = empty_room();
+    add_unit(w, 0, UnitType::Soldier, 2, 2);
+    run(w, {Command::move(0, 1, 6, 6)}, 2);
+    // Both axes moved: a four-connected path would have moved one at a time.
+    CHECK(w.units[0].x > centre(2));
+    CHECK(w.units[0].y > centre(2));
+    CHECK(line_clear(w.map, 2, 2, 6, 6));
+    w.map.set(4, 4, Tile::Wall);
+    CHECK_FALSE(line_clear(w.map, 2, 2, 6, 6));
+    // A diagonal squeeze between two walls is not clear either.
+    World c = empty_room();
+    c.map.set(3, 2, Tile::Wall);
+    c.map.set(2, 3, Tile::Wall);
+    CHECK_FALSE(line_clear(c.map, 2, 2, 4, 4));
+    CHECK(line_of_sight(c.map, 2, 2, 4, 4));  // but an arrow still passes the corner
+}
+
 TEST_CASE("damage is simultaneous: two units that kill each other both die") {
     World w = empty_room();
     add_unit(w, 0, UnitType::Soldier, 4, 4).hp = 1;
