@@ -103,46 +103,83 @@ World make_world(std::uint64_t seed) {
 std::optional<std::pair<int, int>> next_step(const Map& map, int sx, int sy, int gx, int gy) {
     if (sx == gx && sy == gy) return std::nullopt;
     if (map.at(gx, gy) != Tile::Floor) return std::nullopt;
-    // Breadth-first from the goal, so every tile ends up with its distance
-    // to the goal and the start just picks the lowest neighbour. Neighbours
-    // are visited up, left, right, down; the first equal distance wins.
-    constexpr int kUnreached = 0x7fff;
-    std::array<std::int16_t, Map::kWidth * Map::kHeight> dist;
-    dist.fill(kUnreached);
-    std::array<std::int16_t, Map::kWidth * Map::kHeight> queue{};
-    std::size_t head = 0, tail = 0;
+    // A* from the start with the Manhattan distance as the estimate, which
+    // never overestimates on a four-connected grid, so the first time the
+    // goal is taken off the open list its path is a shortest one. The open
+    // list is a set of buckets by f = g + h, each a FIFO; a tile with the
+    // same f but a smaller h goes in front of its bucket. That fixes which
+    // of several shortest paths is taken: the one that heads for the goal
+    // first, and among equals the one found first in the neighbour order
+    // up, left, right, down. No heap, no float, the same on every machine.
+    constexpr int kN = Map::kWidth * Map::kHeight;
+    constexpr int kMaxF = 2 * (Map::kWidth + Map::kHeight);
+    constexpr std::int16_t kNone = -1;
+    std::array<std::int16_t, kN> g;
+    g.fill(kNone);
+    std::array<std::int16_t, kN> parent;
+    // Written before read, so left uninitialised on purpose: zeroing them
+    // was a third of the search's cost.
+    std::array<std::int16_t, kN * 2> bucket;  // every (tile, f) pair pushed at most a few times
+    std::array<std::int16_t, kN * 2> link;    // next index in the same bucket
+    std::array<std::int16_t, kMaxF + 1> bucket_head{}, bucket_tail{};
+    int pushed = 0;
     const auto index = [](int x, int y) { return y * Map::kWidth + x; };
-    dist[static_cast<std::size_t>(index(gx, gy))] = 0;
-    queue[tail++] = static_cast<std::int16_t>(index(gx, gy));
+    const auto h = [&](int x, int y) { return (x > gx ? x - gx : gx - x) + (y > gy ? y - gy : gy - y); };
+    const auto push = [&](int tile, int f, bool front) {
+        const int slot = pushed++;
+        bucket[static_cast<std::size_t>(slot)] = static_cast<std::int16_t>(tile);
+        auto& head = bucket_head[static_cast<std::size_t>(f)];
+        auto& tail = bucket_tail[static_cast<std::size_t>(f)];
+        if (head == 0) {  // empty: slots are stored +1 so 0 means none
+            head = tail = static_cast<std::int16_t>(slot + 1);
+            link[static_cast<std::size_t>(slot)] = 0;
+        } else if (front) {
+            link[static_cast<std::size_t>(slot)] = head;
+            head = static_cast<std::int16_t>(slot + 1);
+        } else {
+            link[static_cast<std::size_t>(tail - 1)] = static_cast<std::int16_t>(slot + 1);
+            link[static_cast<std::size_t>(slot)] = 0;
+            tail = static_cast<std::int16_t>(slot + 1);
+        }
+    };
+    const int start = index(sx, sy), goal = index(gx, gy);
+    g[static_cast<std::size_t>(start)] = 0;
+    parent[static_cast<std::size_t>(start)] = kNone;
+    push(start, h(sx, sy), false);
     constexpr int kDx[4] = {0, -1, 1, 0};
     constexpr int kDy[4] = {-1, 0, 0, 1};
-    while (head < tail) {
-        const int at = queue[head++];
-        const int x = at % Map::kWidth, y = at / Map::kWidth;
-        if (x == sx && y == sy) break;
-        for (int n = 0; n < 4; ++n) {
-            const int nx = x + kDx[n], ny = y + kDy[n];
-            if (nx < 0 || ny < 0 || nx >= Map::kWidth || ny >= Map::kHeight) continue;
-            if (map.at(nx, ny) != Tile::Floor) continue;
-            auto& d = dist[static_cast<std::size_t>(index(nx, ny))];
-            if (d != kUnreached) continue;
-            d = static_cast<std::int16_t>(dist[static_cast<std::size_t>(at)] + 1);
-            queue[tail++] = static_cast<std::int16_t>(index(nx, ny));
+    for (int f = 0; f <= kMaxF; ++f) {
+        while (bucket_head[static_cast<std::size_t>(f)] != 0) {
+            const int slot = bucket_head[static_cast<std::size_t>(f)] - 1;
+            bucket_head[static_cast<std::size_t>(f)] = link[static_cast<std::size_t>(slot)];
+            const int at = bucket[static_cast<std::size_t>(slot)];
+            const int x = at % Map::kWidth, y = at / Map::kWidth;
+            const int ga = g[static_cast<std::size_t>(at)];
+            if (ga + h(x, y) != f) continue;  // a stale entry: the tile was reached cheaper later
+            if (at == goal) {
+                int step = at;
+                while (parent[static_cast<std::size_t>(step)] != start) step = parent[static_cast<std::size_t>(step)];
+                return std::make_pair(step % Map::kWidth, step / Map::kWidth);
+            }
+            for (int n = 0; n < 4; ++n) {
+                const int nx = x + kDx[n], ny = y + kDy[n];
+                if (nx < 0 || ny < 0 || nx >= Map::kWidth || ny >= Map::kHeight) continue;
+                if (map.at(nx, ny) != Tile::Floor) continue;
+                const int ni = index(nx, ny);
+                auto& gn = g[static_cast<std::size_t>(ni)];
+                if (gn != kNone && gn <= ga + 1) continue;
+                gn = static_cast<std::int16_t>(ga + 1);
+                parent[static_cast<std::size_t>(ni)] = static_cast<std::int16_t>(at);
+                const int hn = h(nx, ny);
+                const int fn = ga + 1 + hn;
+                if (fn > kMaxF || pushed >= kN * 2) return std::nullopt;  // cannot happen on this grid
+                // Same f, smaller h: in front of the bucket, so the search keeps
+                // heading for the goal; same h: behind, in neighbour order.
+                push(ni, fn, hn < h(x, y));
+            }
         }
     }
-    if (dist[static_cast<std::size_t>(index(sx, sy))] == kUnreached) return std::nullopt;
-    std::optional<std::pair<int, int>> best;
-    int best_d = kUnreached;
-    for (int n = 0; n < 4; ++n) {
-        const int nx = sx + kDx[n], ny = sy + kDy[n];
-        if (nx < 0 || ny < 0 || nx >= Map::kWidth || ny >= Map::kHeight) continue;
-        const int d = dist[static_cast<std::size_t>(index(nx, ny))];
-        if (d < best_d) {
-            best_d = d;
-            best = std::make_pair(nx, ny);
-        }
-    }
-    return best;
+    return std::nullopt;
 }
 
 bool line_of_sight(const Map& map, int x0, int y0, int x1, int y1) {
@@ -167,9 +204,40 @@ bool line_of_sight(const Map& map, int x0, int y0, int x1, int y1) {
     }
 }
 
+bool line_clear(const Map& map, int x0, int y0, int x1, int y1) {
+    int dx = x1 > x0 ? x1 - x0 : x0 - x1, dy = y1 > y0 ? y1 - y0 : y0 - y1;
+    const int sx = x0 < x1 ? 1 : -1, sy = y0 < y1 ? 1 : -1;
+    int err = dx - dy;
+    int x = x0, y = y0;
+    while (!(x == x1 && y == y1)) {
+        const int e2 = 2 * err;
+        const bool step_x = e2 > -dy, step_y = e2 < dx;
+        if (step_x && step_y) {
+            // A diagonal step touches the two tiles beside the corner as well.
+            if (map.at(x + sx, y) != Tile::Floor || map.at(x, y + sy) != Tile::Floor) return false;
+        }
+        if (step_x) {
+            err -= dy;
+            x += sx;
+        }
+        if (step_y) {
+            err += dx;
+            y += sy;
+        }
+        if ((x != x1 || y != y1) && map.at(x, y) != Tile::Floor) return false;
+    }
+    return true;
+}
+
 namespace {
 
 Unit* find_unit(std::vector<Unit>& units, std::uint32_t id) {
+    auto it = std::lower_bound(units.begin(), units.end(), id,
+                               [](const Unit& u, std::uint32_t v) { return u.id < v; });
+    return it != units.end() && it->id == id ? &*it : nullptr;
+}
+
+const Unit* find_unit(std::span<const Unit> units, std::uint32_t id) {
     auto it = std::lower_bound(units.begin(), units.end(), id,
                                [](const Unit& u, std::uint32_t v) { return u.id < v; });
     return it != units.end() && it->id == id ? &*it : nullptr;
@@ -199,46 +267,64 @@ void stride(const Map& map, Unit& u, Fixed tx, Fixed ty) {
     if (map.at(tile_of(u.x), tile_of(ny)) == Tile::Floor) u.y = ny;
 }
 #else
-// Moves `pos` towards `target` by at most `speed`.
-Fixed approach(Fixed pos, Fixed target, Fixed speed) {
-    if (target > pos) return target - pos > speed ? pos + speed : target;
-    if (target < pos) return pos - target > speed ? pos - speed : target;
-    return pos;
-}
+Fixed abs(Fixed v) { return v.raw < 0 ? Fixed::from_raw(-v.raw) : v; }
 
-// One axis at a time, so a wall ahead on x still lets the unit slide on y.
+// One tick of movement along the segment to (tx, ty): the longer axis moves
+// by `speed`, the shorter by the matching fraction, so the unit stays on
+// the line that line_clear() checked (a move per axis of up to `speed`
+// each would cut 45 degree corners off it and leave the checked corridor).
+// The axes are still applied one at a time, so a wall ahead on x lets the
+// unit slide on y.
 void stride(const Map& map, Unit& u, Fixed tx, Fixed ty) {
     const Fixed speed = stats(u.type).speed;
-    const Fixed nx = approach(u.x, tx, speed);
+    const Fixed dx = tx - u.x, dy = ty - u.y;
+    const Fixed ax = abs(dx), ay = abs(dy);
+    Fixed sx = dx, sy = dy;  // the whole way, when it is within one stride
+    const Fixed longest = ax > ay ? ax : ay;
+    if (longest > speed) {
+        if (ax >= ay) {
+            sx = dx.raw < 0 ? Fixed::from_raw(-speed.raw) : speed;
+            sy = speed * dy / ax;
+        } else {
+            sy = dy.raw < 0 ? Fixed::from_raw(-speed.raw) : speed;
+            sx = speed * dx / ay;
+        }
+    }
+    const Fixed nx = u.x + sx;
     if (map.at(tile_of(nx), tile_of(u.y)) == Tile::Floor) u.x = nx;
-    const Fixed ny = approach(u.y, ty, speed);
+    const Fixed ny = u.y + sy;
     if (map.at(tile_of(u.x), tile_of(ny)) == Tile::Floor) u.y = ny;
 }
 #endif
 
-// Walks towards (tx, ty) along the shortest path over floor tiles: this
-// tick's stride goes to the centre of the next tile on it, or straight at
-// the target once on its tile. Other units' tiles count as walls, except
-// the goal tile, so an attacker still closes in on its target; it stops
-// short of entering a goal tile someone else stands on. A target that
-// cannot be reached falls back to the straight line, which at worst stands
-// still.
-void walk(const World& world, Unit& u, Fixed tx, Fixed ty) {
+// Where `u` would be after one tick of walking towards (tx, ty), given the
+// map and where everyone else stood at the start of the tick. Other units'
+// tiles count as walls, except the goal tile, so an attacker still closes in
+// on its target; it stops short of entering a goal tile someone else stands
+// on. If the straight segment to the goal is clear the unit walks it, corners
+// and all, with no search; otherwise it strides to the first tile of the
+// shortest four-connected path. A goal that cannot be reached falls back to
+// the straight line, which at worst stands still.
+std::pair<Fixed, Fixed> plan_walk(const Map& map, std::span<const Unit> others, const Unit& u, Fixed tx, Fixed ty) {
     const int sx = tile_of(u.x), sy = tile_of(u.y), gx = tile_of(tx), gy = tile_of(ty);
-    Map blocked = world.map;
+    Map blocked = map;
     bool goal_taken = false;
-    for (const Unit& o : world.units) {
+    for (const Unit& o : others) {
         if (o.id == u.id) continue;
         const int ox = tile_of(o.x), oy = tile_of(o.y);
         if (ox == gx && oy == gy) goal_taken = true;
         else blocked.set(ox, oy, Tile::Wall);
     }
-    if (const auto next = next_step(blocked, sx, sy, gx, gy)) {
-        tx = tile_centre(next->first);
-        ty = tile_centre(next->second);
+    if (!line_clear(blocked, sx, sy, gx, gy)) {
+        if (const auto next = next_step(blocked, sx, sy, gx, gy)) {
+            tx = tile_centre(next->first);
+            ty = tile_centre(next->second);
+        }
     }
     if (goal_taken && (sx != gx || sy != gy)) blocked.set(gx, gy, Tile::Wall);
-    stride(blocked, u, tx, ty);
+    Unit moved = u;
+    stride(blocked, moved, tx, ty);
+    return {moved.x, moved.y};
 }
 
 struct Hit {
@@ -299,33 +385,70 @@ void step(World& world, std::span<const Command> commands) {
 #else
     std::vector<Unit>& acting = world.units;
 #endif
+    //    Every decision reads `before`, the units as they stood when the tick
+    //    began, so a unit that acts later in the loop does not see the moves
+    //    of the ones before it: with the same AI on both sides the lower ids
+    //    used to win noticeably more, and this is why. Moves are planned
+    //    here and applied below.
+    std::array<Unit, kMaxUnits> before_storage;
+    std::copy(world.units.begin(), world.units.end(), before_storage.begin());
+    const std::span<const Unit> before(before_storage.data(), world.units.size());
     std::array<Hit, kMaxUnits> hits;
     std::size_t hit_count = 0;
+    std::array<std::pair<Fixed, Fixed>, kMaxUnits> planned;
+    std::array<bool, kMaxUnits> moves{};
+    std::size_t slot = 0;
     for (auto& unit : acting) {
         Unit& u = deref(unit);
+        const std::size_t i = slot++;
         if (u.cooldown > 0) --u.cooldown;
+        const Unit& was = *find_unit(before, u.id);
         if (u.order == Order::Move) {
-            walk(world, u, Fixed::from_int(u.target_x) + Fixed::from_ratio(1, 2),
-                 Fixed::from_int(u.target_y) + Fixed::from_ratio(1, 2));
+            planned[i] = plan_walk(world.map, before, was, Fixed::from_int(u.target_x) + Fixed::from_ratio(1, 2),
+                                   Fixed::from_int(u.target_y) + Fixed::from_ratio(1, 2));
+            moves[i] = true;
         } else if (u.order == Order::Attack) {
-            const Unit* target = find_unit(world.units, u.target_id);
+            const Unit* target = find_unit(before, u.target_id);
             if (target == nullptr) {
                 u.order = Order::None;
                 continue;
             }
-            const Fixed dx = target->x - u.x;
-            const Fixed dy = target->y - u.y;
+            const Fixed dx = target->x - was.x;
+            const Fixed dy = target->y - was.y;
             const Fixed range = stats(u.type).range;
             const bool in_range = dx * dx + dy * dy <= range * range &&
-                                  line_of_sight(world.map, tile_of(u.x), tile_of(u.y), tile_of(target->x), tile_of(target->y));
+                                  line_of_sight(world.map, tile_of(was.x), tile_of(was.y), tile_of(target->x), tile_of(target->y));
             if (!in_range) {
-                walk(world, u, target->x, target->y);
+                planned[i] = plan_walk(world.map, before, was, target->x, target->y);
+                moves[i] = true;
             } else if (u.cooldown == 0) {
                 if (world.rng.below(100) < world.hit_percent) {
                     hits[hit_count++] = {target->id, damage(u.type, target->type)};
                 }
                 u.cooldown = kAttackCooldown;
             }
+        }
+    }
+
+    // 2b. Moves land in id order. A tile that another unit already holds, at
+    //     its new position if it moved first and its old one otherwise, is
+    //     refused and the unit stays; so two units walking into one tile is
+    //     settled by id, and nothing else in the tick is.
+    slot = 0;
+    for (auto& unit : acting) {
+        Unit& u = deref(unit);
+        const std::size_t i = slot++;
+        if (!moves[i]) continue;
+        const int nx = tile_of(planned[i].first), ny = tile_of(planned[i].second);
+        bool taken = false;
+        if (nx != tile_of(u.x) || ny != tile_of(u.y)) {
+            for (const Unit& o : world.units) {
+                if (o.id != u.id && tile_of(o.x) == nx && tile_of(o.y) == ny) taken = true;
+            }
+        }
+        if (!taken) {
+            u.x = planned[i].first;
+            u.y = planned[i].second;
         }
     }
 

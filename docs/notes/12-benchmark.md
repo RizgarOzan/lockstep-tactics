@@ -96,7 +96,7 @@ running a breadth-first search for every moving unit every tick (and
 `bench 200 600 50` under gcc reads min 1292, median 1852, max 2219 ns/tick:
 about 26× the 70 ns above, and still 600 ticks in roughly a millisecond.
 The allocation fix is unchanged and still counts; the path search is simply
-much bigger than everything else now. Obvious next steps, in order: search
-only when the straight stride is blocked, cache the distance field per
-goal tile within a tick, and stop copying the map. Each is a hash-neutral
-change if done carefully, which `replay 1000 600` will confirm.
+much bigger than everything else now. Note 13 took the first two of the
+obvious steps (walk a clear straight line without searching; A* instead of
+a breadth-first fill) and reads about 1.0 µs per tick. Caching the distance
+field per goal tile within a tick is still open.

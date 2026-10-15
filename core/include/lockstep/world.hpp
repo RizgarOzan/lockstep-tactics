@@ -103,10 +103,11 @@ struct World {
 // one unit of each type per player.
 World make_world(std::uint64_t seed);
 
-// The first tile of the shortest walk from (sx, sy) to (gx, gy) over floor
-// tiles, four-connected, or nothing when the goal cannot be reached. Ties
-// are broken in a fixed neighbour order, so every machine picks the same
-// tile. Units walk one of these steps per tick.
+// The first tile of a shortest walk from (sx, sy) to (gx, gy) over floor
+// tiles, four-connected, or nothing when the goal cannot be reached. Among
+// equally short walks the one that heads for the goal first wins, then a
+// fixed neighbour order, so every machine picks the same tile. Units walk
+// one of these steps per tick when the straight line is not clear.
 std::optional<std::pair<int, int>> next_step(const Map& map, int sx, int sy, int gx, int gy);
 
 // Whether no wall tile lies on the straight line between the two tiles
@@ -114,9 +115,18 @@ std::optional<std::pair<int, int>> next_step(const Map& map, int sx, int sy, int
 // well as range, so a wall is cover, not just an obstacle.
 bool line_of_sight(const Map& map, int x0, int y0, int x1, int y1);
 
+// Stricter than line_of_sight: every tile the segment touches, including
+// both tiles at a diagonal step, is floor (end tiles not counted). A unit
+// whose goal passes this walks straight at it, diagonally if it likes,
+// without a path search; otherwise it follows next_step().
+bool line_clear(const Map& map, int x0, int y0, int x1, int y1);
+
 // One tick: apply this tick's commands (in player, then unit id order,
-// whatever order they arrived in), move and attack in unit id order, then
-// apply all damage at once and remove the dead.
+// whatever order they arrived in); every unit then decides its move or its
+// hit from the positions at the start of the tick, so acting first within a
+// tick buys nothing; moves are applied in id order with a tile contested by
+// two units going to the lower id; damage lands all at once and the dead
+// are removed.
 void step(World& world, std::span<const Command> commands);
 std::uint64_t hash(const World& world);
 

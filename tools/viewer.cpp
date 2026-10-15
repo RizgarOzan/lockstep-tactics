@@ -33,6 +33,7 @@
 #include "lockstep/player.hpp"
 #include "lockstep/random_orders.hpp"
 #include "lockstep/replay.hpp"
+#include "lockstep/rollback.hpp"
 #include "lockstep/world.hpp"
 #include "raylib.h"
 
@@ -124,7 +125,8 @@ struct Match {
     // An online match: both players are people in two browsers, and a tick
     // runs only when both sides' orders for it have arrived.
     bool online = false;
-    std::optional<lockstep::Lockstep> sync;
+    std::optional<lockstep::Lockstep> sync;    // input delay: a tick waits for both sides
+    std::optional<lockstep::Rollback> roll;    // no delay: run now, re-run when the peer's orders arrive
     bool waiting = false;    // this tick is due but the peer's frame is not in yet
     bool peer_left = false;
 
@@ -171,6 +173,18 @@ struct Match {
     // Returns false when an online tick has to wait for the peer.
     bool tick() {
         std::vector<lockstep::Command> commands;
+        if (online && roll) {
+            const std::string frame = roll->advance(pending);
+            waiting = frame.empty();
+            if (waiting) return false;
+            pending.clear();
+            net_send(frame.c_str());
+            before = world.units;
+            world = roll->world();
+            if (selected != 0 && !find(world.units, selected)) selected = 0;
+            effects();
+            return true;
+        }
         if (online) {
             const std::string frame = sync->submit(pending);
             if (!frame.empty()) {
@@ -195,6 +209,12 @@ struct Match {
         replay.hashes.push_back(lockstep::hash(world));
         if (online) sync->ran(world.tick, replay.hashes.back());
         if (selected != 0 && !find(world.units, selected)) selected = 0;
+        effects();
+        return true;
+    }
+
+    // Flashes, attack lines and ghosts, read off `before` against `world`.
+    void effects() {
         for (const auto& u : world.units) {
             const lockstep::Unit* p = find(before, u.id);
             if (p && u.hp < p->hp) flashes.push_back({u.id, kEffect});
@@ -207,7 +227,17 @@ struct Match {
         for (const auto& p : before) {
             if (!find(world.units, p.id)) ghosts.push_back({p, kGhost});
         }
-        return true;
+    }
+
+    // The peer's orders arrived (rollback): the present may have been re-run.
+    void peer_frame(const char* frame) {
+        if (roll) {
+            roll->receive(frame);
+            before = world.units;
+            world = roll->world();
+        } else if (sync) {
+            sync->receive(frame);
+        }
     }
 
     static Vector2 centre(const lockstep::Unit& u) {
@@ -246,7 +276,8 @@ Match match;
 // as a download in the browser.
 void save_replay() {
     const std::string name = "replay-" + std::to_string(match.seed) + ".txt";
-    const std::string text = lockstep::to_text(match.replay);
+    // A rollback match saves its confirmed part: the ticks both sides' orders are in for.
+    const std::string text = lockstep::to_text(match.roll ? match.roll->replay() : match.replay);
 #if defined(__EMSCRIPTEN__)
     download_text(text.c_str(), name.c_str());
 #else
@@ -317,20 +348,45 @@ void draw_unit(const lockstep::Unit& u, Vector2 at, float alpha, float scale, bo
     }
 }
 
+// The tiles a unit will walk to reach (gx, gy): the same next_step() the
+// simulation uses, with the other units as walls, followed tile by tile
+// until the goal or 40 steps. Drawn as dots, so the detour round a wall is
+// visible before the unit takes it. Read-only; nothing here touches the World.
+void draw_path(const lockstep::Unit& u, int gx, int gy, Color c) {
+    lockstep::Map blocked = match.world.map;
+    for (const auto& o : match.world.units) {
+        const int ox = o.x.raw >> lockstep::Fixed::kFracBits, oy = o.y.raw >> lockstep::Fixed::kFracBits;
+        if (o.id != u.id && (ox != gx || oy != gy)) blocked.set(ox, oy, lockstep::Tile::Wall);
+    }
+    int x = u.x.raw >> lockstep::Fixed::kFracBits, y = u.y.raw >> lockstep::Fixed::kFracBits;
+    if (lockstep::line_clear(blocked, x, y, gx, gy)) return;  // a straight walk needs no dots
+    for (int i = 0; i < 40; ++i) {
+        const auto next = lockstep::next_step(blocked, x, y, gx, gy);
+        if (!next) break;
+        x = next->first;
+        y = next->second;
+        if (x == gx && y == gy) break;
+        DrawCircleV(tile_centre(x, y), 3.0f, Fade(c, 0.55f));
+    }
+}
+
 // Where an order points: a diamond on the destination tile, or a ring around
-// the target unit. `alpha` tells an order still waiting from one already given.
+// the target unit, with the path there dotted. `alpha` tells an order still
+// waiting from one already given.
 void draw_order(const lockstep::Unit& u, lockstep::Order order, std::int32_t tx, std::int32_t ty,
                 std::uint32_t target_id, float alpha) {
     const Color c = Fade(kTeam[u.owner], alpha);
     const Vector2 from = drawn_position(u);
     if (order == lockstep::Order::Move) {
         const Vector2 to = tile_centre(tx, ty);
-        DrawLineEx(from, to, 1.5f, Fade(c, 0.5f));
+        DrawLineEx(from, to, 1.5f, Fade(c, 0.3f));
+        draw_path(u, tx, ty, c);
         DrawPoly(to, 4, kTile * 0.22f, 0.0f, c);
     } else if (order == lockstep::Order::Attack) {
         if (const lockstep::Unit* t = Match::find(match.world.units, target_id)) {
             const Vector2 to = drawn_position(*t);
-            DrawLineEx(from, to, 1.5f, Fade(c, 0.5f));
+            DrawLineEx(from, to, 1.5f, Fade(c, 0.3f));
+            draw_path(u, t->x.raw >> lockstep::Fixed::kFracBits, t->y.raw >> lockstep::Fixed::kFracBits, c);
             DrawRing(to, kTile * 0.42f, kTile * 0.48f, 0, 360, 24, c);
         }
     }
@@ -339,12 +395,19 @@ void draw_order(const lockstep::Unit& u, lockstep::Order order, std::int32_t tx,
 // Selection ring, hovered tile, the selected unit's current order, every
 // waiting order, and a one-line hint. Only while playing Blue.
 void draw_player_layer(Vector2 mouse) {
-    if (!match.human) return;
+    // Hovering any unit, in either mode, shows its order and the path it will
+    // take: the AI's intentions are readable the same way the player's are.
     if (mouse.y >= kTop && mouse.x >= 0 && mouse.x < kBoard && mouse.y < kHeight) {
         const int tx = static_cast<int>(mouse.x / kTile), ty = static_cast<int>((mouse.y - kTop) / kTile);
-        DrawRectangleLinesEx({static_cast<float>(tx * kTile), static_cast<float>(kTop + ty * kTile), kTile, kTile}, 2,
-                             Fade(RAYWHITE, 0.35f));
+        if (const lockstep::Unit* h = lockstep::unit_at(match.world, tx, ty)) {
+            if (h->id != match.selected) draw_order(*h, h->order, h->target_x, h->target_y, h->target_id, 0.5f);
+        }
+        if (match.human) {
+            DrawRectangleLinesEx({static_cast<float>(tx * kTile), static_cast<float>(kTop + ty * kTile), kTile, kTile}, 2,
+                                 Fade(RAYWHITE, 0.35f));
+        }
     }
+    if (!match.human) return;
     const lockstep::Unit* sel = Match::find(match.world.units, match.selected);
     if (sel) {
         DrawRing(drawn_position(*sel), kTile * 0.44f, kTile * 0.49f, 0, 360, 32, RAYWHITE);
@@ -400,17 +463,25 @@ void draw_top_bar() {
     DrawRectangle(300, 24, 220, 4, Color{40, 43, 52, 255});
     DrawRectangle(300, 24, static_cast<int>(220 * progress), 4, Color{150, 160, 180, 255});
     if (match.online) {
-        std::snprintf(line, sizeof line, "online  -  you are %s  -  %u ticks ahead", kTeamName[match.local_player],
-                      match.sync->delay());
+        if (match.roll) {
+            std::snprintf(line, sizeof line, "online  -  you are %s  -  rollback, confirmed %u, re-run %llu",
+                          kTeamName[match.local_player], match.roll->confirmed(),
+                          static_cast<unsigned long long>(match.roll->resimulated()));
+        } else {
+            std::snprintf(line, sizeof line, "online  -  you are %s  -  %u ticks ahead", kTeamName[match.local_player],
+                          match.sync->delay());
+        }
         text_centre(line, 410, 34, 10, kTeam[match.local_player]);
-        if (match.sync->desync()) {
-            std::snprintf(line, sizeof line, "DESYNC AT TICK %u  -  save the replay", *match.sync->desync());
+        const auto desync = match.roll ? match.roll->desync() : match.sync->desync();
+        if (desync) {
+            std::snprintf(line, sizeof line, "DESYNC AT TICK %u  -  save the replay", *desync);
             DrawRectangle(kBoard / 2 - 150, kTop + 6, 300, 20, Color{120, 30, 30, 230});
             text_centre(line, kBoard / 2, kTop + 11, 10, RAYWHITE);
         } else if (match.peer_left) {
             text_centre("the other player left", kBoard / 2, kTop + 11, 10, kMuted);
         } else if (match.waiting) {
-            text_centre("waiting for the other player", kBoard / 2, kTop + 11, 10, kMuted);
+            text_centre(match.roll ? "too far ahead of the other player, waiting" : "waiting for the other player",
+                        kBoard / 2, kTop + 11, 10, kMuted);
         }
     } else if (match.paused) text_centre("PAUSED", 410, 34, 10, kMuted);
     else if (match.human) text_centre("you are Blue", 410, 34, 10, kTeam[0]);
@@ -635,19 +706,21 @@ int capture(const char* dir, std::uint64_t seed, int frames, int fps, float tick
 #if defined(__EMSCRIPTEN__)
 extern "C" {
 // The page calls these once its WebRTC data channel is up (tools/shell.html).
+// delay 0 means rollback: orders run on the tick they are given.
 EMSCRIPTEN_KEEPALIVE void net_start(int player, unsigned seed, unsigned delay) {
     match.start(seed);
     match.human = true;
     match.online = true;
     match.peer_left = false;
     match.local_player = static_cast<std::uint32_t>(player);
-    match.sync.emplace(match.local_player, delay);
+    match.sync.reset();
+    match.roll.reset();
+    if (delay == 0) match.roll.emplace(match.local_player, seed, 30u);
+    else match.sync.emplace(match.local_player, delay);
     match.ticks_per_second = 10.0f;
     match.paused = false;
 }
-EMSCRIPTEN_KEEPALIVE void net_receive(const char* frame) {
-    if (match.sync) match.sync->receive(frame);
-}
+EMSCRIPTEN_KEEPALIVE void net_receive(const char* frame) { match.peer_frame(frame); }
 EMSCRIPTEN_KEEPALIVE void net_closed() { match.peer_left = true; }
 }
 #endif

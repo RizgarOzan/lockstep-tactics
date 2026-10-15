@@ -19,7 +19,7 @@ if(MINGW)
   add_link_options(-static)
 endif()
 
-add_library(lockstep_core STATIC core/src/world.cpp core/src/replay.cpp core/src/ai.cpp core/src/net.cpp)
+add_library(lockstep_core STATIC core/src/world.cpp core/src/replay.cpp core/src/ai.cpp core/src/net.cpp core/src/rollback.cpp)
 target_include_directories(lockstep_core PUBLIC core/include)
 target_link_libraries(lockstep_core PRIVATE lockstep_warnings)
 
@@ -62,7 +62,7 @@ FetchContent_Declare(doctest
   SYSTEM)
 FetchContent_MakeAvailable(doctest)
 
-add_executable(core_tests tests/test_hash.cpp tests/test_world.cpp tests/test_fixed.cpp tests/test_rng.cpp tests/test_setup.cpp tests/test_combat.cpp tests/test_replay.cpp tests/test_player.cpp tests/test_ai.cpp tests/test_net.cpp)
+add_executable(core_tests tests/test_hash.cpp tests/test_world.cpp tests/test_fixed.cpp tests/test_rng.cpp tests/test_setup.cpp tests/test_combat.cpp tests/test_replay.cpp tests/test_player.cpp tests/test_ai.cpp tests/test_net.cpp tests/test_rollback.cpp)
 target_link_libraries(core_tests PRIVATE lockstep_core lockstep_warnings doctest::doctest_with_main)
 
 # The viewer pulls in raylib, so it is opt-in: the determinism CI never needs it.
