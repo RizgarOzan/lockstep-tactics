@@ -60,6 +60,8 @@ catches it.
 | Online, a tick runs when both sides' orders for it are in | orders scheduled three ticks ahead; frames carry the last hash | [10](docs/notes/10-two-browsers.md) |
 | Paths by BFS with a fixed tie order; cover by integer Bresenham | the same tile and the same shot on every machine | [11](docs/notes/11-paths-cover-and-bodies.md) |
 | Pockets filled by a flood fill that draws no random numbers | map generation keeps one draw per tile | [11](docs/notes/11-paths-cover-and-bodies.md) |
+| Every unit decides from the tick's starting positions | acting first within a tick buys nothing | [13](docs/notes/13-fair-fast-and-rollback.md) |
+| Rollback confirms a tick only with both sides' orders | the replay holds confirmed ticks, never guesses | [13](docs/notes/13-fair-fast-and-rollback.md) |
 
 Three of these rules were also broken in a whole build (`-DLOCKSTEP_RISKY=unordered|float|size_t`,
 [note 06](docs/notes/06-breaking-it-on-purpose.md)), 1,000 matches each:
@@ -117,9 +119,10 @@ MSVC and WebAssembly, after the three per-tick heap allocations were
 removed (it was 1.8–2.7× slower before that, and until then WebAssembly
 was the fastest build, most likely because its allocator is single-threaded).
 The shortest-path walk in [note 11](docs/notes/11-paths-cover-and-bodies.md)
-runs a breadth-first search per moving unit per tick and now dominates:
-about 1.85 µs per tick under gcc, 600 ticks in a millisecond, which is fine
-for a game at ten ticks a second and the obvious next thing to optimise.
+is A* with a bucketed open list, run per moving unit whose straight line
+is blocked, and it dominates: about 1.0 µs per tick under gcc (1.85 with
+the first breadth-first version), 600 ticks in well under a millisecond,
+fine for ten ticks a second and still the obvious next thing to optimise.
 Method, numbers and the fix: [note 12](docs/notes/12-benchmark.md). The
 benchmark does not run in CI on purpose; shared runners are not a clock.
 
@@ -184,7 +187,10 @@ the speed, P switches between watching and playing Blue, S saves the replay
 or an enemy.
 
 To play a friend, one browser presses *Create a room* and reads out the
-six-letter code, the other types it and presses *Join*. The handshake goes
+six-letter code, the other types it and presses *Join*. Ticking *rollback*
+before creating the room removes the input delay: orders run at once and
+the ticks since are re-run when the other side's arrive
+([note 13](docs/notes/13-fair-fast-and-rollback.md)). The handshake goes
 through a public [ntfy.sh](https://ntfy.sh) topic (`?relay=` points the page
 at another ntfy server); after that the two browsers exchange lockstep
 frames directly over WebRTC ([note 10](docs/notes/10-two-browsers.md)). The
@@ -205,8 +211,9 @@ same `lockstep::Lockstep` class, with no sockets in it, is what
 8. ~~A second human: two browsers exchanging commands over a relay, with the same replay format as proof.~~ Done ([note 10](docs/notes/10-two-browsers.md)).
 9. ~~Shortest paths, line of sight, one unit per tile, and an AI that focuses, waits for its slow units and kites.~~ Done ([note 11](docs/notes/11-paths-cover-and-bodies.md)).
 10. ~~A benchmark of the step alone, and the first optimisation it pointed at.~~ Done ([note 12](docs/notes/12-benchmark.md)).
-11. Rollback on top of the same frames, so an order lands on the tick it was given instead of three later.
-12. Fairness: with the same AI on both sides Orange wins more, because lower ids act first within a tick.
+11. ~~Rollback on top of the same frames, so an order lands on the tick it was given instead of three later.~~ Done ([note 13](docs/notes/13-fair-fast-and-rollback.md)).
+12. ~~Fairness: with the same AI on both sides Orange wins more, because lower ids act first within a tick.~~ Done: 496 to 489 now ([note 13](docs/notes/13-fair-fast-and-rollback.md)).
+13. A fourth unit type, and a map with an objective, so a match is more than a brawl.
 
 ## Contributing
 
@@ -221,7 +228,10 @@ Good first changes, each small enough for one pull request:
   outnumbered; measure it against the five opponents in note 11;
 - a third unit type, with its row in the matchup table and in the tests;
 - a TURN fallback or a different signalling relay for the online mode, kept
-  behind the same `?relay=` parameter.
+  behind the same `?relay=` parameter;
+- a distance field cached per goal tile within a tick, so three units
+  walking to one target share one search (hash-neutral; `replay 1000 600`
+  must not change).
 
 The rule for every change: `ctest` green under at least two compilers, and
 `replay 1000 600` identical between them. If a change is meant to alter the
