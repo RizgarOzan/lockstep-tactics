@@ -20,6 +20,7 @@
 // is interpolated with float; none of it flows back into the simulation
 // (docs/notes/07-viewer.md). Every match is recorded as it plays, so "save"
 // writes a replay that `lockstep verify` checks on any machine.
+#include <algorithm>
 #include <cinttypes>
 #include <cstdio>
 #include <cstdlib>
@@ -78,6 +79,7 @@ const Color kCard{30, 33, 40, 255};
 const Color kCardHot{40, 44, 54, 255};
 const Color kFloorA{37, 40, 48, 255};
 const Color kFloorB{41, 44, 53, 255};
+const Color kObjective{214, 178, 86, 255};  // the four tiles a side can win by holding
 const Color kGrid{30, 32, 39, 255};
 const Color kWall{70, 75, 90, 255};
 const Color kWallTop{104, 110, 128, 255};
@@ -150,7 +152,7 @@ struct Match {
         for (const auto& u : world.units) n += u.owner == owner;
         return n;
     }
-    bool over() const { return world.tick >= kMatchTicks || alive(0) == 0 || alive(1) == 0; }
+    bool over() const { return world.tick >= kMatchTicks || lockstep::winner(world) != -1; }
 
     static const lockstep::Unit* find(const std::vector<lockstep::Unit>& units, std::uint32_t id) {
         for (const auto& u : units) {
@@ -460,8 +462,16 @@ void draw_top_bar() {
     text_right(line, kWidth - 16, 10, 20, kText);
     text_right("state hash, FNV-1a over every field", kWidth - 16, 34, 10, kMuted);
     const float progress = static_cast<float>(match.world.tick) / kMatchTicks;
-    DrawRectangle(300, 24, 220, 4, Color{40, 43, 52, 255});
-    DrawRectangle(300, 24, static_cast<int>(220 * progress), 4, Color{150, 160, 180, 255});
+    DrawRectangle(300, 12, 220, 4, Color{40, 43, 52, 255});
+    DrawRectangle(300, 12, static_cast<int>(220 * progress), 4, Color{150, 160, 180, 255});
+    // Each side's ticks on the objective, towards the hold that wins.
+    text("hold", 272, 19, 10, kMuted);
+    for (int p = 0; p < 2; ++p) {
+        const int y = 20 + p * 5;
+        const float held = static_cast<float>(std::min(match.world.held[static_cast<std::size_t>(p)], lockstep::kHoldToWin)) / lockstep::kHoldToWin;
+        DrawRectangle(300, y, 220, 3, Color{40, 43, 52, 255});
+        DrawRectangle(300, y, static_cast<int>(220 * held), 3, kTeam[p]);
+    }
     if (match.online) {
         if (match.roll) {
             std::snprintf(line, sizeof line, "online  -  you are %s  -  rollback, confirmed %u, re-run %llu",
@@ -489,6 +499,12 @@ void draw_top_bar() {
 }
 
 void draw_board() {
+    // Who stands on the objective alone this tick: that side's colour on it.
+    bool there[2] = {false, false};
+    for (const auto& u : match.world.units) {
+        there[u.owner] |= lockstep::on_objective(u.x.raw >> lockstep::Fixed::kFracBits, u.y.raw >> lockstep::Fixed::kFracBits);
+    }
+    const int holder = there[0] != there[1] ? (there[0] ? 0 : 1) : -1;
     for (int y = 0; y < lockstep::Map::kHeight; ++y) {
         for (int x = 0; x < lockstep::Map::kWidth; ++x) {
             const int px = x * kTile, py = kTop + y * kTile;
@@ -504,6 +520,11 @@ void draw_board() {
                 DrawRectangle(px, py, kTile, kTile, (x + y) % 2 ? kFloorA : kFloorB);
                 DrawRectangle(px, py, kTile, 1, kGrid);
                 DrawRectangle(px, py, 1, kTile, kGrid);
+                if (lockstep::on_objective(x, y)) {
+                    const Color c = holder == 0 || holder == 1 ? kTeam[holder] : kObjective;
+                    DrawRectangle(px, py, kTile, kTile, Fade(c, 0.18f));
+                    DrawRectangleLines(px, py, kTile, kTile, Fade(c, 0.6f));
+                }
             }
         }
     }
@@ -629,8 +650,12 @@ void draw(bool clicked, Vector2 mouse) {
     draw_player_layer(mouse);
     if (match.over()) {
         const int a = match.alive(0), b = match.alive(1);
-        const char* line = a == b ? "DRAW" : a > b ? "BLUE WINS" : "ORANGE WINS";
-        const Color c = a == b ? RAYWHITE : kTeam[a > b ? 0 : 1];
+        int win = lockstep::winner(match.world);
+        if (win == -1) win = a == b ? 2 : a > b ? 0 : 1;  // out of ticks: more units left
+        const bool by_hold = win != 2 && match.world.held[static_cast<std::size_t>(win)] >= lockstep::kHoldToWin;
+        const char* line = win == 2 ? "DRAW" : win == 0 ? (by_hold ? "BLUE HOLDS THE OBJECTIVE" : "BLUE WINS")
+                                             : (by_hold ? "ORANGE HOLDS THE OBJECTIVE" : "ORANGE WINS");
+        const Color c = win == 2 ? RAYWHITE : kTeam[win];
         DrawRectangle(0, kTop + 270, kBoard, 100, Fade(BLACK, 0.7f));
         DrawRectangle(0, kTop + 270, kBoard, 2, c);
         text_centre(line, kBoard / 2, kTop + 294, 40, c);

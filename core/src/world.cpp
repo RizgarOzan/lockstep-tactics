@@ -29,12 +29,28 @@ constexpr std::array<UnitStats, 3> kStats{{
 constexpr int kSpawnColumn[2] = {1, Map::kWidth - 2};
 constexpr int kSpawnRow[3] = {5, 7, 9};
 constexpr std::uint32_t kWallPercent = 15;
+// Top-left tile of the 2x2 objective.
+constexpr int kObjectiveX = Map::kWidth / 2 - 1;
+constexpr int kObjectiveY = Map::kHeight / 2 - 1;
 
 Fixed tile_centre(int tile) { return Fixed::from_int(tile) + Fixed::from_ratio(1, 2); }
 
 }  // namespace
 
 const UnitStats& stats(UnitType type) { return kStats[static_cast<std::size_t>(type)]; }
+
+bool on_objective(int tx, int ty) {
+    return tx >= kObjectiveX && tx < kObjectiveX + 2 && ty >= kObjectiveY && ty < kObjectiveY + 2;
+}
+
+int winner(const World& world) {
+    if (world.held[0] >= kHoldToWin) return 0;
+    if (world.held[1] >= kHoldToWin) return 1;
+    bool alive[2] = {false, false};
+    for (const Unit& u : world.units) alive[u.owner] = true;
+    if (alive[0] && alive[1]) return -1;
+    return alive[0] ? 0 : alive[1] ? 1 : 2;
+}
 
 std::int32_t damage(UnitType attacker, UnitType target) {
     // Rock, paper, scissors with a bonus rather than a multiplier: an Archer
@@ -60,6 +76,14 @@ World make_world(std::uint64_t seed) {
             const bool wall = edge || (interior && world.rng.below(100) < kWallPercent);
             world.map.set(x, y, wall ? Tile::Wall : Tile::Floor);
         }
+    }
+
+    // The objective is always floor, drawn walls or not. Walling all of it in
+    // takes a ring of at least eight walls; 100,000 seeds never drew one
+    // (docs/notes/14), and if one ever does, the fill below walls the
+    // objective too and that map is won by fighting alone.
+    for (int y = kObjectiveY; y < kObjectiveY + 2; ++y) {
+        for (int x = kObjectiveX; x < kObjectiveX + 2; ++x) world.map.set(x, y, Tile::Floor);
     }
 
     // Fill every floor tile the spawns cannot reach, so no unit can be sent
@@ -458,6 +482,14 @@ void step(World& world, std::span<const Command> commands) {
         if (Unit* t = find_unit(world.units, hits[i].target_id)) t->hp -= hits[i].damage;
     }
     std::erase_if(world.units, [](const Unit& u) { return u.hp <= 0; });
+
+    // 4. The objective, from where the survivors stand: held by a side only
+    //    while the other has nobody on it.
+    bool there[2] = {false, false};
+    for (const Unit& u : world.units) {
+        if (on_objective(tile_of(u.x), tile_of(u.y))) there[u.owner] = true;
+    }
+    if (there[0] != there[1]) ++world.held[there[0] ? 0 : 1];
     ++world.tick;
 }
 

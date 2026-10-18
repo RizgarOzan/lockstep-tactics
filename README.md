@@ -23,11 +23,14 @@ overflow.
 > **Status: playable.** Two players, a 16×16 map, a Soldier, an Archer and a
 > Knight each; move and attack orders, hit rolls, cooldowns, simultaneous
 > damage, and a matchup triangle (Soldier beats Archer beats Knight beats
-> Soldier), shortest-path movement, walls as cover and one unit per tile. A
-> deterministic AI plays Orange with one focus for the whole side, a hold for
-> slow teammates and Archers that shoot and step back; it beats the random
-> player in 995 of 1,000 matches and a focus-fire script 738 to 257
-> ([note 11](docs/notes/11-paths-cover-and-bodies.md) has it against five
+> Soldier), shortest-path movement, walls as cover, one unit per tile and a
+> 2x2 objective in the middle that wins the match for a side that holds it
+> alone for 100 ticks. A deterministic AI plays Orange with one focus for
+> the whole side, a hold for slow teammates and Archers that shoot and step
+> back; it sits on the objective while nobody can hit it and pushes off
+> whoever stands there. It beats the random player in 998 of 1,000 matches,
+> 133 of them by holding, and a focus-fire script 800 to 194
+> ([note 15](docs/notes/15-playing-the-objective.md) has it against five
 > opponents). You can play Blue against it in the browser, or play
 > another person: two browsers run the match in lockstep over a WebRTC data
 > channel, three ticks ahead, comparing hashes as they go. In 1,000
@@ -36,6 +39,11 @@ overflow.
 > replay recorded under MSVC also verifies tick by tick under WebAssembly,
 > and when two runs disagree the `lockstep` tool names the first tick and
 > the field: it located 100 of 100 injected desyncs exactly.
+
+Contents: [What makes it deterministic](#what-makes-it-deterministic) ·
+[Why not …](#why-not-) · [How fast](#how-fast) ·
+[How the check works](#how-the-check-works) · [Build](#build) ·
+[Roadmap](#roadmap) · [Contributing](#contributing)
 
 ## What makes it deterministic
 
@@ -158,12 +166,25 @@ between a 64-bit and a 32-bit target.
 Needs CMake ≥ 3.25 and a C++20 compiler; doctest is fetched by CMake.
 
 ```bash
+git clone https://github.com/RizgarOzan/lockstep-tactics && cd lockstep-tactics
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
 cmake --build build
 ctest --test-dir build
 build/replay 1000 600     # one hash per seed, what CI diffs between compilers
 build/arena 1000 600      # AI vs random: who won
+build/probe 1000 600      # AI vs five scripted opponents, as a table
 build/bench 200 600 50    # ns per tick: min, median, max over 50 repeats
+```
+
+What the first two print (gcc 16, Release; MSVC, clang and WebAssembly print the same hashes):
+
+```
+$ build/replay 3 600      # seed, state hash after 600 ticks, units left
+0 2c7ec7d4c6b3e65a 3
+1 0c0e469783636348 3
+2 3658fcb0603809af 3
+$ build/arena 1000 600
+1000 matches: AI (orange) 998, random (blue) 2, draw 0; 133 won on the objective; mean length 108 ticks
 ```
 
 WebAssembly, with the Emscripten SDK active:
@@ -213,20 +234,23 @@ same `lockstep::Lockstep` class, with no sockets in it, is what
 10. ~~A benchmark of the step alone, and the first optimisation it pointed at.~~ Done ([note 12](docs/notes/12-benchmark.md)).
 11. ~~Rollback on top of the same frames, so an order lands on the tick it was given instead of three later.~~ Done ([note 13](docs/notes/13-fair-fast-and-rollback.md)).
 12. ~~Fairness: with the same AI on both sides Orange wins more, because lower ids act first within a tick.~~ Done: 496 to 489 now ([note 13](docs/notes/13-fair-fast-and-rollback.md)).
-13. A fourth unit type, and a map with an objective, so a match is more than a brawl.
+13. ~~A map with an objective, so a match is more than a brawl.~~ Done: the rule in [note 14](docs/notes/14-objective.md), an AI that plays for it in [note 15](docs/notes/15-playing-the-objective.md).
+14. A fourth unit type.
 
 ## Contributing
 
-Good first changes, each small enough for one pull request:
+Good first changes, each small enough for one pull request. The ones with
+an issue already written, including what "done" means, are under
+[`good first issue`](https://github.com/RizgarOzan/lockstep-tactics/labels/good%20first%20issue);
+comment on one before you start.
 
 - a new deliberately broken build under `LOCKSTEP_RISKY` (a `std::sort` on
   equal keys, signed overflow, a `double` in the AI's scoring) with its
   measured numbers added to the table above;
 - a fourth CI target (gcc on Linux arm64, or MSVC x86) in `determinism.yml`;
-- a stronger AI in `core/src/ai.cpp` that still uses integers only: a unit
-  that steps aside for a teammate in a corridor, or a retreat when
-  outnumbered; measure it against the five opponents in note 11;
-- a third unit type, with its row in the matchup table and in the tests;
+- a stronger AI in `core/src/ai.cpp` that still uses integers only, for example a retreat
+  when outnumbered; measure it against the five opponents in note 11;
+- a fourth unit type, with its row in the matchup table and in the tests;
 - a TURN fallback or a different signalling relay for the online mode, kept
   behind the same `?relay=` parameter;
 - a distance field cached per goal tile within a tick, so three units

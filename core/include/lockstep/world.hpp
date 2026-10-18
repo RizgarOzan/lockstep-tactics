@@ -96,11 +96,24 @@ struct World {
     std::vector<Unit> units;
     Pcg32 rng{0u, 0u};
     std::uint32_t hit_percent = 80;
+    // Ticks each player has held the objective, alone. Never reset.
+    std::array<std::uint32_t, 2> held{};
 };
 
+// The objective: the 2x2 tiles in the middle of the map. At the end of a
+// tick, a side with units on it while the other side has none there scores
+// one tick of hold.
+bool on_objective(int tx, int ty);
+inline constexpr std::uint32_t kHoldToWin = 100;
+
+// 0 or 1 for the player who has won: kHoldToWin ticks on the objective, or
+// the last side with units. 2 when both sides lost their last unit in the
+// same tick, -1 while the match goes on.
+int winner(const World& world);
+
 // Walls around the edge, random interior walls, both spawn columns clear,
-// every floor tile reachable from the spawns (pockets are filled in), and
-// one unit of each type per player.
+// the objective clear and reachable, every floor tile reachable from the
+// spawns (pockets are filled in), and one unit of each type per player.
 World make_world(std::uint64_t seed);
 
 // The first tile of a shortest walk from (sx, sy) to (gx, gy) over floor
@@ -126,7 +139,7 @@ bool line_clear(const Map& map, int x0, int y0, int x1, int y1);
 // hit from the positions at the start of the tick, so acting first within a
 // tick buys nothing; moves are applied in id order with a tile contested by
 // two units going to the lower id; damage lands all at once and the dead
-// are removed.
+// are removed; then the objective is scored.
 void step(World& world, std::span<const Command> commands);
 std::uint64_t hash(const World& world);
 

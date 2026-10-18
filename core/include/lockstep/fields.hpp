@@ -53,6 +53,8 @@ void visit_fields(const World& w, F&& f) {
     f(Field{"rng.state"}, w.rng.state());
     f(Field{"rng.increment"}, w.rng.increment());
     f(Field{"hit_percent"}, bits(w.hit_percent));
+    f(Field{"held[0]"}, bits(w.held[0]));
+    f(Field{"held[1]"}, bits(w.held[1]));
 }
 
 // "" when equal, otherwise "<field>: <a> vs <b>" for the first field that differs.

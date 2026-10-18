@@ -21,6 +21,9 @@ World room() {
             w.map.set(x, y, edge ? Tile::Wall : Tile::Floor);
         }
     }
+    // Blue is a tick ahead on the objective, so the AI (Orange) fights
+    // rather than going to sit on it; the objective tests reset this.
+    w.held[0] = 1;
     return w;
 }
 
@@ -43,13 +46,15 @@ bool same(const std::vector<Command>& a, const std::vector<Command>& b) {
 
 }  // namespace
 
-TEST_CASE("the AI orders every idle unit to attack, and repeats nothing") {
+TEST_CASE("the AI orders every idle unit, and repeats nothing") {
+    // A fresh match: level on the hold count, so the side walks to the objective.
     const World w = make_world(1);
     const std::vector<Command> orders = ai_orders(w, 1);
     REQUIRE(orders.size() == 3);
     for (const Command& c : orders) {
         CHECK(c.player == 1);
-        CHECK(c.order == Order::Attack);
+        CHECK(c.order == Order::Move);
+        CHECK(on_objective(c.target_x, c.target_y));
     }
     CHECK(same(ai_orders(w, 1), orders));  // same world, same orders
     World after = w;
@@ -199,4 +204,89 @@ TEST_CASE("the AI beats the random player in most seeded matches") {
         ai_wins += orange > blue;
     }
     CHECK(ai_wins >= seeds * 7 / 10);
+}
+
+TEST_CASE("an enemy standing on the objective is the focus, however far away") {
+    // Blue id 4 sits on the objective; Blue id 5 is much nearer the AI's
+    // Knights, and would be the focus on distance alone.
+    World w = room();
+    w.held[0] = 0;
+    REQUIRE(on_objective(7, 7));
+    add(w, 1, UnitType::Knight, 2, 2);  // id 1
+    add(w, 1, UnitType::Knight, 2, 3);  // id 2
+    add(w, 1, UnitType::Knight, 3, 2);  // id 3
+    add(w, 0, UnitType::Knight, 7, 7);  // id 4, on the objective
+    add(w, 0, UnitType::Knight, 4, 5);  // id 5, nearer, out of reach
+    const auto orders = ai_orders(w, 1);
+    REQUIRE(orders.size() == 3);
+    for (const Command& c : orders) {
+        CHECK(c.order == Order::Attack);
+        CHECK(c.target_id == 4);
+    }
+}
+
+TEST_CASE("level on the hold count with the objective empty, the AI goes and sits on it") {
+    World w = room();
+    w.held[0] = 0;
+    add(w, 1, UnitType::Knight, 2, 2);    // id 1
+    add(w, 1, UnitType::Knight, 2, 3);    // id 2
+    add(w, 1, UnitType::Knight, 2, 4);    // id 3
+    add(w, 0, UnitType::Knight, 13, 13);  // id 4, far away and off the objective
+    const auto orders = ai_orders(w, 1);
+    REQUIRE(orders.size() == 3);
+    for (std::size_t i = 0; i < orders.size(); ++i) {
+        CHECK(orders[i].order == Order::Move);
+        CHECK(on_objective(orders[i].target_x, orders[i].target_y));
+        for (std::size_t j = 0; j < i; ++j) {
+            CHECK((orders[i].target_x != orders[j].target_x || orders[i].target_y != orders[j].target_y));
+        }
+    }
+    // Once there, each unit holds its own tile and no order is repeated.
+    World there = room();
+    there.held[0] = 0;
+    add(there, 1, UnitType::Knight, 7, 7);
+    add(there, 1, UnitType::Knight, 8, 7);
+    add(there, 1, UnitType::Knight, 7, 8);
+    add(there, 0, UnitType::Knight, 13, 13);
+    const auto hold = ai_orders(there, 1);
+    REQUIRE(hold.size() == 3);
+    for (const Command& c : hold) {
+        const Unit* u = nullptr;
+        for (const Unit& x : there.units) {
+            if (x.id == c.unit_id) u = &x;
+        }
+        REQUIRE(u != nullptr);
+        CHECK(c.order == Order::Move);
+        CHECK(c.target_x == u->x.raw >> Fixed::kFracBits);
+        CHECK(c.target_y == u->y.raw >> Fixed::kFracBits);
+    }
+    step(there, hold);
+    CHECK(ai_orders(there, 1).empty());
+    CHECK(there.held[1] == 1);
+}
+
+TEST_CASE("behind on the hold count, the AI fights instead of sitting") {
+    World w = room();
+    add(w, 1, UnitType::Knight, 2, 2);  // close enough together that nobody waits
+    add(w, 1, UnitType::Knight, 3, 2);
+    add(w, 1, UnitType::Knight, 2, 3);
+    add(w, 0, UnitType::Knight, 13, 13);  // id 4
+    w.held[0] = 5;
+    const auto orders = ai_orders(w, 1);
+    REQUIRE(orders.size() == 3);
+    for (const Command& c : orders) {
+        CHECK(c.order == Order::Attack);
+        CHECK(c.target_id == 4);
+    }
+}
+
+TEST_CASE("the AI wins some matches on the objective") {
+    int on_hold = 0;
+    for (std::uint64_t seed = 0; seed < 100; ++seed) {
+        std::uint64_t rng = seed;
+        World w = make_world(seed);
+        for (int t = 0; t < 600 && winner(w) == -1; ++t) step(w, match_orders(w, rng));
+        on_hold += winner(w) == 1 && w.held[1] >= kHoldToWin;
+    }
+    CHECK(on_hold > 0);
 }

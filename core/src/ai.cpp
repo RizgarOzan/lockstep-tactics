@@ -157,6 +157,54 @@ std::int64_t gap_behind(const World& w, std::uint32_t player, const Unit& u, con
     return farthest - dist2(u, target);
 }
 
+bool stands_on_objective(const Unit& u) { return on_objective(tile_of(u.x), tile_of(u.y)); }
+
+// The objective's tiles, in a fixed order, read off the map so the AI
+// does not need to know where it is.
+std::vector<std::pair<int, int>> objective_tiles() {
+    std::vector<std::pair<int, int>> tiles;
+    for (int y = 0; y < Map::kHeight; ++y) {
+        for (int x = 0; x < Map::kWidth; ++x) {
+            if (on_objective(x, y)) tiles.emplace_back(x, y);
+        }
+    }
+    return tiles;
+}
+
+// Each of our units gets an objective tile of its own: one standing on a
+// tile keeps it, the rest take the nearest free tile in id order. Units
+// left without a tile (more units than tiles) get nothing.
+std::vector<std::optional<std::pair<int, int>>> assign_objective(const std::vector<const Unit*>& mine) {
+    std::vector<std::pair<int, int>> free = objective_tiles();
+    std::vector<std::optional<std::pair<int, int>>> post(mine.size());
+    for (std::size_t i = 0; i < mine.size(); ++i) {
+        for (std::size_t t = 0; t < free.size(); ++t) {
+            if (free[t].first == tile_of(mine[i]->x) && free[t].second == tile_of(mine[i]->y)) {
+                post[i] = free[t];
+                free.erase(free.begin() + static_cast<std::ptrdiff_t>(t));
+                break;
+            }
+        }
+    }
+    for (std::size_t i = 0; i < mine.size(); ++i) {
+        if (post[i] || free.empty()) continue;
+        const int ux = tile_of(mine[i]->x), uy = tile_of(mine[i]->y);
+        std::size_t best = 0;
+        std::int64_t best_d = 0;
+        for (std::size_t t = 0; t < free.size(); ++t) {
+            const std::int64_t d = static_cast<std::int64_t>(free[t].first - ux) * (free[t].first - ux) +
+                                   static_cast<std::int64_t>(free[t].second - uy) * (free[t].second - uy);
+            if (t == 0 || d < best_d) {
+                best = t;
+                best_d = d;
+            }
+        }
+        post[i] = free[best];
+        free.erase(free.begin() + static_cast<std::ptrdiff_t>(best));
+    }
+    return post;
+}
+
 }  // namespace
 
 std::vector<Command> ai_orders(const World& w, std::uint32_t player) {
@@ -169,21 +217,41 @@ std::vector<Command> ai_orders(const World& w, std::uint32_t player) {
     // on one unit at a time instead of being spread over three. Scored for
     // the team: total squared distance, minus twelve per favourable matchup,
     // plus the enemy's remaining health per unit of ours. Ties go to the
-    // lower id, which is just the order units are stored in.
+    // lower id, which is just the order units are stored in. An enemy
+    // standing on the objective counts sixty-four tiles² nearer per unit of
+    // ours: every tick it stands there alone is a tick towards its win, so
+    // the side goes and pushes it off before anything else.
     const Unit* focus = nullptr;
     std::int64_t best = 0;
+    bool contested = false;
     for (const Unit* e : theirs) {
         std::int64_t score = 0;
         for (const Unit* u : mine) score += dist2(*u, *e) - 12 * matchup(u->type, e->type);
         score += static_cast<std::int64_t>(e->hp) * static_cast<std::int64_t>(mine.size());
+        if (stands_on_objective(*e)) {
+            score -= 64 * static_cast<std::int64_t>(mine.size());
+            contested = true;
+        }
         if (focus == nullptr || score < best) {
             focus = e;
             best = score;
         }
     }
 
-    for (const Unit* up : mine) {
-        const Unit& u = *up;
+    // With nobody to push off, nobody able to hit us from where it stands
+    // (a Knight that sat still while an Archer shot it from four tiles would
+    // lose the match sitting) and the hold count level or ahead, the side
+    // sits on the objective and lets the clock win the match; behind on the
+    // count it fights as before, because sitting would only lose slower.
+    bool threatened = false;
+    for (const Unit* u : mine) {
+        for (const Unit* e : theirs) threatened |= can_hit(w, *e, *u);
+    }
+    const bool sit = !contested && !threatened && w.held[player] >= w.held[1 - player];
+    const auto posts = sit ? assign_objective(mine) : std::vector<std::optional<std::pair<int, int>>>(mine.size());
+
+    for (std::size_t i = 0; i < mine.size(); ++i) {
+        const Unit& u = *mine[i];
         const Unit* nearest = nullptr;
         std::int64_t near = 0;
         for (const Unit* e : theirs) {
@@ -237,6 +305,15 @@ std::vector<Command> ai_orders(const World& w, std::uint32_t player) {
                         continue;
                     }
                 }
+            }
+            // Nothing in reach and a post on the objective: walk there and
+            // stand (a move to its own tile), without the gap wait, which is
+            // about not arriving at a fight alone.
+            if (posts[i]) {
+                if (u.order != Order::Move || u.target_x != posts[i]->first || u.target_y != posts[i]->second) {
+                    out.push_back(Command::move(player, u.id, posts[i]->first, posts[i]->second));
+                }
+                continue;
             }
             // Nothing in reach: move on the focus, but not alone. A unit more
             // than five tiles² ahead of the slowest teammate waits where it

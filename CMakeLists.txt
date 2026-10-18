@@ -43,6 +43,8 @@ add_executable(bench tools/bench.cpp)
 target_link_libraries(bench PRIVATE lockstep_core lockstep_warnings)
 add_executable(arena tools/arena.cpp)
 target_link_libraries(arena PRIVATE lockstep_core lockstep_warnings)
+add_executable(probe tools/probe.cpp)
+target_link_libraries(probe PRIVATE lockstep_core lockstep_warnings)
 
 add_executable(lockstep tools/lockstep.cpp)
 target_link_libraries(lockstep PRIVATE lockstep_core lockstep_warnings)
@@ -62,7 +64,7 @@ FetchContent_Declare(doctest
   SYSTEM)
 FetchContent_MakeAvailable(doctest)
 
-add_executable(core_tests tests/test_hash.cpp tests/test_world.cpp tests/test_fixed.cpp tests/test_rng.cpp tests/test_setup.cpp tests/test_combat.cpp tests/test_replay.cpp tests/test_player.cpp tests/test_ai.cpp tests/test_net.cpp tests/test_rollback.cpp)
+add_executable(core_tests tests/test_hash.cpp tests/test_world.cpp tests/test_fixed.cpp tests/test_rng.cpp tests/test_setup.cpp tests/test_combat.cpp tests/test_replay.cpp tests/test_player.cpp tests/test_ai.cpp tests/test_net.cpp tests/test_rollback.cpp tests/test_objective.cpp)
 target_link_libraries(core_tests PRIVATE lockstep_core lockstep_warnings doctest::doctest_with_main)
 
 # The viewer pulls in raylib, so it is opt-in: the determinism CI never needs it.
