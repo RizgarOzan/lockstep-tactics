@@ -265,6 +265,42 @@ TEST_CASE("level on the hold count with the objective empty, the AI goes and sit
     CHECK(there.held[1] == 1);
 }
 
+TEST_CASE("walking to the objective with an enemy near, a unit ahead waits for its teammates") {
+    World w = room();
+    w.held[0] = 0;
+    add(w, 1, UnitType::Soldier, 6, 8);  // id 1: four tiles ahead of the Knight
+    add(w, 1, UnitType::Knight, 2, 8);   // id 2
+    add(w, 0, UnitType::Knight, 12, 8);  // id 3: six tiles off, cannot hit anyone
+    auto orders = ai_orders(w, 1);
+    REQUIRE(orders.size() == 2);
+    CHECK(orders[0].unit_id == 1);
+    CHECK(orders[0].order == Order::Move);  // holds its own tile
+    CHECK(orders[0].target_x == 6);
+    CHECK(orders[0].target_y == 8);
+    CHECK(orders[1].unit_id == 2);
+    CHECK(on_objective(orders[1].target_x, orders[1].target_y));
+    // With the enemy more than eight tiles away the walk is free: a unit
+    // waiting then would only hand the enemy the hold count.
+    w.units[2].x = centre(13);
+    w.units[2].y = centre(13);
+    orders = ai_orders(w, 1);
+    REQUIRE(orders.size() == 2);
+    CHECK(orders[0].unit_id == 1);
+    CHECK(on_objective(orders[0].target_x, orders[0].target_y));
+}
+
+TEST_CASE("a unit being shot at does not stand and wait for its teammates") {
+    World w = room();
+    add(w, 1, UnitType::Soldier, 9, 8);  // id 1: far ahead of the Knight
+    add(w, 1, UnitType::Knight, 2, 8);   // id 2
+    add(w, 0, UnitType::Archer, 12, 8);  // id 3: three tiles off, in its range, out of the Soldier's
+    const auto orders = ai_orders(w, 1);
+    REQUIRE(orders.size() == 2);
+    CHECK(orders[0].unit_id == 1);
+    CHECK(orders[0].order == Order::Attack);
+    CHECK(orders[0].target_id == 3);
+}
+
 TEST_CASE("behind on the hold count, the AI fights instead of sitting") {
     World w = room();
     add(w, 1, UnitType::Knight, 2, 2);  // close enough together that nobody waits

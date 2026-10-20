@@ -29,9 +29,9 @@ overflow.
 > the whole side, a hold for slow teammates and Archers that shoot and step
 > back; it sits on the objective while nobody can hit it and pushes off
 > whoever stands there. It beats the random player in 998 of 1,000 matches,
-> 133 of them by holding, and a focus-fire script 800 to 194
-> ([note 15](docs/notes/15-playing-the-objective.md) has it against five
-> opponents). You can play Blue against it in the browser, or play
+> 59 of them by holding, a focus-fire script 813 to 177 and a kiting Archer
+> 580 to 384 ([note 16](docs/notes/16-walking-together.md) has it against
+> five opponents). You can play Blue against it in the browser, or play
 > another person: two browsers run the match in lockstep over a WebRTC data
 > channel, three ticks ahead, comparing hashes as they go. In 1,000
 > seeded matches of 600 ticks, MSVC x64, Apple clang arm64 and WebAssembly
@@ -70,6 +70,7 @@ catches it.
 | Pockets filled by a flood fill that draws no random numbers | map generation keeps one draw per tile | [11](docs/notes/11-paths-cover-and-bodies.md) |
 | Every unit decides from the tick's starting positions | acting first within a tick buys nothing | [13](docs/notes/13-fair-fast-and-rollback.md) |
 | Rollback confirms a tick only with both sides' orders | the replay holds confirmed ticks, never guesses | [13](docs/notes/13-fair-fast-and-rollback.md) |
+| On the walk to the objective, wait for the group only with an enemy within eight tiles | without the gate the side waits for itself across an empty map and times out | [16](docs/notes/16-walking-together.md) |
 
 Three of these rules were also broken in a whole build (`-DLOCKSTEP_RISKY=unordered|float|size_t`,
 [note 06](docs/notes/06-breaking-it-on-purpose.md)), 1,000 matches each:
@@ -184,7 +185,7 @@ $ build/replay 3 600      # seed, state hash after 600 ticks, units left
 1 0c0e469783636348 3
 2 3658fcb0603809af 3
 $ build/arena 1000 600
-1000 matches: AI (orange) 998, random (blue) 2, draw 0; 133 won on the objective; mean length 108 ticks
+1000 matches: AI (orange) 998, random (blue) 2, draw 0; 59 won on the objective; mean length 111 ticks
 ```
 
 WebAssembly, with the Emscripten SDK active:
@@ -234,7 +235,7 @@ same `lockstep::Lockstep` class, with no sockets in it, is what
 10. ~~A benchmark of the step alone, and the first optimisation it pointed at.~~ Done ([note 12](docs/notes/12-benchmark.md)).
 11. ~~Rollback on top of the same frames, so an order lands on the tick it was given instead of three later.~~ Done ([note 13](docs/notes/13-fair-fast-and-rollback.md)).
 12. ~~Fairness: with the same AI on both sides Orange wins more, because lower ids act first within a tick.~~ Done: 496 to 489 now ([note 13](docs/notes/13-fair-fast-and-rollback.md)).
-13. ~~A map with an objective, so a match is more than a brawl.~~ Done: the rule in [note 14](docs/notes/14-objective.md), an AI that plays for it in [note 15](docs/notes/15-playing-the-objective.md).
+13. ~~A map with an objective, so a match is more than a brawl.~~ Done: the rule in [note 14](docs/notes/14-objective.md), an AI that plays for it in [note 15](docs/notes/15-playing-the-objective.md), the tempo it lost to the kiting Archer won back in [note 16](docs/notes/16-walking-together.md).
 14. A fourth unit type.
 
 ## Contributing

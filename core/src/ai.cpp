@@ -307,9 +307,21 @@ std::vector<Command> ai_orders(const World& w, std::uint32_t player) {
                 }
             }
             // Nothing in reach and a post on the objective: walk there and
-            // stand (a move to its own tile), without the gap wait, which is
-            // about not arriving at a fight alone.
+            // stand (a move to its own tile). With an enemy within eight
+            // tiles the walk is a fight about to start, so it keeps the
+            // group together like the walk on the focus below, with a
+            // tighter gap (over two tiles² waits, under one tile² goes
+            // on): the Soldier is the fastest unit and alone it is the
+            // first thing the enemy's melee picks off. Farther off, the
+            // walk is free, because waiting would only hand the enemy the
+            // hold count.
             if (posts[i]) {
+                const std::int64_t pgap = gap_behind(w, player, u, *focus);
+                const bool pwait = near <= 64 && (holding(u) ? pgap > 9 : pgap > 4);
+                if (pwait && mine.size() > 1) {
+                    if (!holding(u)) out.push_back(Command::move(player, u.id, tile_of(u.x), tile_of(u.y)));
+                    continue;
+                }
                 if (u.order != Order::Move || u.target_x != posts[i]->first || u.target_y != posts[i]->second) {
                     out.push_back(Command::move(player, u.id, posts[i]->first, posts[i]->second));
                 }
@@ -318,9 +330,14 @@ std::vector<Command> ai_orders(const World& w, std::uint32_t player) {
             // Nothing in reach: move on the focus, but not alone. A unit more
             // than five tiles² ahead of the slowest teammate waits where it
             // stands until the gap is under three; the two thresholds keep
-            // it from flapping between the two orders every tick.
+            // it from flapping between the two orders every tick. A unit
+            // an enemy can already hit does not wait: standing still under
+            // an Archer's fire with nothing to hit back is how the wait
+            // lost matches, so it closes in instead.
+            bool under_fire = false;
+            for (const Unit* e : theirs) under_fire |= can_hit(w, *e, u);
             const std::int64_t gap = gap_behind(w, player, u, *focus);
-            const bool wait = holding(u) ? gap > 9 : gap > 25;
+            const bool wait = !under_fire && (holding(u) ? gap > 9 : gap > 25);
             if (wait && mine.size() > 1) {
                 if (!holding(u)) out.push_back(Command::move(player, u.id, tile_of(u.x), tile_of(u.y)));
                 continue;
