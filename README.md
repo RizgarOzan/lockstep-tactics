@@ -253,10 +253,7 @@ comment on one before you start.
   when outnumbered; measure it against the five opponents in note 11;
 - a fourth unit type, with its row in the matchup table and in the tests;
 - a TURN fallback or a different signalling relay for the online mode, kept
-  behind the same `?relay=` parameter;
-- a distance field cached per goal tile within a tick, so three units
-  walking to one target share one search (hash-neutral; `replay 1000 600`
-  must not change).
+  behind the same `?relay=` parameter.
 
 The rule for every change: `ctest` green under at least two compilers, and
 `replay 1000 600` identical between them. If a change is meant to alter the

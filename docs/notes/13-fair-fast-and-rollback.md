@@ -47,6 +47,15 @@ the breadth-first search (note 12's 70 ns was before any pathfinding).
 Still mostly the search; the next step would be caching the distance field
 per goal tile within a tick.
 
+Measured later (2026-10-23, gcc, 200 seeds × 600 ticks of `random_orders`,
+every unit checked against a breadth-first field from its goal): it is not
+worth doing. Of 227,383 calls that needed a search, 226,682 had a goal no
+other unit used that tick, so a cache would almost never be hit. A full
+field costs 1,686 ns against 250 ns for the A* call it would replace,
+because A* stops when it reaches the unit. And picking the next step from
+the field does not reproduce A*'s tie order: with the closest-to-goal rule
+1.9 % of steps differ (4,386), which would move every replay hash.
+
 ## Rollback
 
 `core/include/lockstep/rollback.hpp` is the second way to play online, on
