@@ -20,25 +20,19 @@ multiplayer and replays stand on, and it breaks in quiet ways — floats,
 unordered containers, `std::sort` on equal keys, `size_t` width, signed
 overflow.
 
-> **Status: playable.** Two players, a 16×16 map, a Soldier, an Archer and a
-> Knight each; move and attack orders, hit rolls, cooldowns, simultaneous
-> damage, and a matchup triangle (Soldier beats Archer beats Knight beats
-> Soldier), shortest-path movement, walls as cover, one unit per tile and a
-> 2x2 objective in the middle that wins the match for a side that holds it
-> alone for 100 ticks. A deterministic AI plays Orange with one focus for
-> the whole side, a hold for slow teammates and Archers that shoot and step
-> back; it sits on the objective while nobody can hit it and pushes off
-> whoever stands there. It beats the random player in 998 of 1,000 matches,
-> 59 of them by holding, a focus-fire script 813 to 177 and a kiting Archer
-> 580 to 384 ([note 16](docs/notes/16-walking-together.md) has it against
-> five opponents). You can play Blue against it in the browser, or play
-> another person: two browsers run the match in lockstep over a WebRTC data
-> channel, three ticks ahead, comparing hashes as they go. In 1,000
-> seeded matches of 600 ticks, MSVC x64, Apple clang arm64 and WebAssembly
-> reach the same final hash in every one (CI checks this on each push). A
-> replay recorded under MSVC also verifies tick by tick under WebAssembly,
-> and when two runs disagree the `lockstep` tool names the first tick and
-> the field: it located 100 of 100 injected desyncs exactly.
+> **Status: playable.** Two players, a 16×16 map, three unit types in a
+> Soldier–Archer–Knight triangle, and a central objective that wins the match
+> if held alone for 100 ticks. The deterministic AI beats a random player in
+> 998 of 1,000 matches; play Blue against it in the browser, or play another
+> person over WebRTC. In 1,000 seeded matches of 600 ticks, MSVC x64, Apple
+> clang arm64 and WebAssembly reach the same final hash in every one (CI
+> checks this on each push). When two runs disagree, the `lockstep` tool names
+> the first tick and field: it located 100 of 100 injected desyncs.
+
+```bash
+git clone https://github.com/RizgarOzan/lockstep-tactics && cd lockstep-tactics
+cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release && cmake --build build && ctest --test-dir build
+```
 
 Contents: [What makes it deterministic](#what-makes-it-deterministic) ·
 [Why not …](#why-not-) · [How fast](#how-fast) ·
@@ -250,7 +244,8 @@ comment on one before you start.
   measured numbers added to the table above;
 - a fourth CI target (gcc on Linux arm64, or MSVC x86) in `determinism.yml`;
 - a stronger AI in `core/src/ai.cpp` that still uses integers only, for example a retreat
-  when outnumbered; measure it against the five opponents in note 11;
+  when outnumbered; measure it with `build/probe 1000 600` against the five
+  opponents ([note 16](docs/notes/16-walking-together.md) has the latest table);
 - a fourth unit type, with its row in the matchup table and in the tests;
 - a TURN fallback or a different signalling relay for the online mode, kept
   behind the same `?relay=` parameter.
