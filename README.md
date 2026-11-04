@@ -1,33 +1,37 @@
 # lockstep-tactics
 
 [![determinism](https://github.com/RizgarOzan/lockstep-tactics/actions/workflows/determinism.yml/badge.svg)](https://github.com/RizgarOzan/lockstep-tactics/actions/workflows/determinism.yml)
+[![licence: MIT](https://img.shields.io/badge/licence-MIT-blue)](LICENSE)
 
-**[▶ Play it in the browser](https://rizgarozan.github.io/lockstep-tactics/)**: the
-simulation compiled to WebAssembly. Watch the AI beat a random player, take
-Blue yourself, or open a room and play a friend in another browser, with the
-live state hash on screen and a *save* button that writes a replay any
-machine can verify.
+A C++20 tactics game that stays bit-identical on MSVC x64, Apple clang arm64
+and WebAssembly, checked on every push.
+**[Play it in the browser](https://rizgarozan.github.io/lockstep-tactics/).**
 
 <p align="center">
   <img src="docs/media/match.gif" width="720" alt="Seed 1: random Blue against the AI. Orange advances together, walks round the walls, focuses one blue unit at a time while its Archer shoots and steps back; the unit cards on the right show health and what each unit is doing, and Orange wins at tick 118; the state hash in the top right updates every tick">
 </p>
 <p align="center"><sub>Seed 1 at 2× speed, random Blue against the AI, rendered headless by <code>viewer --capture</code>.</sub></p>
 
-A small tick-based tactics simulation in C++20, written to be **bit-identical
-across compilers**: the same inputs must give the same state hash under MSVC
-x64, Apple clang on arm64 and WebAssembly, on every tick. That property is what lockstep
-multiplayer and replays stand on, and it breaks in quiet ways — floats,
-unordered containers, `std::sort` on equal keys, `size_t` width, signed
-overflow.
+Lockstep multiplayer and replays only work if every machine computes the same
+state from the same inputs, and that breaks in quiet ways: floats, unordered
+containers, `std::sort` on equal keys, `size_t` width, signed overflow. This
+project removes each of them and checks the result with a state hash on
+every tick. In the browser you can watch the AI, play Blue against it, or
+play a friend in another browser over WebRTC, and save a replay any machine
+can verify.
 
-> **Status: playable.** Two players, a 16×16 map, three unit types in a
-> Soldier–Archer–Knight triangle, and a central objective that wins the match
-> if held alone for 100 ticks. The deterministic AI beats a random player in
-> 998 of 1,000 matches; play Blue against it in the browser, or play another
-> person over WebRTC. In 1,000 seeded matches of 600 ticks, MSVC x64, Apple
-> clang arm64 and WebAssembly reach the same final hash in every one (CI
-> checks this on each push). When two runs disagree, the `lockstep` tool names
-> the first tick and field: it located 100 of 100 injected desyncs.
+## Results
+
+| Check | Result | Where |
+|---|---|---|
+| Same final hash on MSVC x64, Apple clang arm64, WebAssembly | 1,000 of 1,000 seeded matches, 600 ticks each | CI, [`determinism.yml`](.github/workflows/determinism.yml) |
+| Bisector names the first differing tick and field | 100 of 100 injected desyncs | [`tests/test_replay.cpp`](tests/test_replay.cpp), [note 05](docs/notes/05-replays-and-the-bisector.md) |
+| Integer-only AI against random orders | 998 wins, 2 losses, 0 draws in 1,000 matches | `build/arena 1000 600` |
+| Cost of one tick | 64–89 ns before pathfinding, about 1.0 µs with A* (gcc) | `build/bench`, one laptop, [note 12](docs/notes/12-benchmark.md) |
+
+## Quick start
+
+Needs CMake 3.25+, Ninja and a C++20 compiler.
 
 ```bash
 git clone https://github.com/RizgarOzan/lockstep-tactics && cd lockstep-tactics
@@ -37,7 +41,7 @@ cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release && cmake --build build &
 Contents: [What makes it deterministic](#what-makes-it-deterministic) ·
 [Why not …](#why-not-) · [How fast](#how-fast) ·
 [How the check works](#how-the-check-works) · [Build](#build) ·
-[Roadmap](#roadmap) · [Contributing](#contributing)
+[Repository layout](#repository-layout) · [Limits](#limits) · [Contributing](#contributing)
 
 ## What makes it deterministic
 
@@ -107,8 +111,8 @@ Write-up of these two experiments:
 - **… an engine's netcode (Unity Netcode, Godot, Photon)?** Those give you
   state synchronisation; they do not give you a simulation that is the same
   everywhere, and they cannot be dropped into a browser tab. This is the
-  layer underneath, small enough to read in an afternoon (about 700 lines of
-  C++ for the simulation and the tools).
+  layer underneath, small enough to read in a day (about 2,000 lines of
+  C++ in `core/`, headers included).
 - **… GGPO or a rollback library?** Rollback assumes determinism and solves
   latency on top of it. The hard part they leave to you, "is my simulation
   actually deterministic, and where did it stop being so", is what the replay
@@ -175,9 +179,9 @@ What the first two print (gcc 16, Release; MSVC, clang and WebAssembly print the
 
 ```
 $ build/replay 3 600      # seed, state hash after 600 ticks, units left
-0 2c7ec7d4c6b3e65a 3
-1 0c0e469783636348 3
-2 3658fcb0603809af 3
+0 26bff752087859d1 2
+1 9131a69ff17a5fff 3
+2 e1870a78387b20a6 3
 $ build/arena 1000 600
 1000 matches: AI (orange) 998, random (blue) 2, draw 0; 59 won on the objective; mean length 111 ticks
 ```
@@ -213,24 +217,35 @@ frames directly over WebRTC ([note 10](docs/notes/10-two-browsers.md)). The
 same `lockstep::Lockstep` class, with no sockets in it, is what
 `tests/test_net.cpp` runs two of against each other.
 
-## Roadmap
+## Repository layout
 
-1. ~~One map, three unit types, fixed-point movement and combat, fixed timestep.~~ Done.
-2. ~~Replay files: record inputs, play them back, check the hash every tick.~~ Done.
-3. ~~A desync bisector that names the first differing tick and field.~~ Done.
-4. ~~Deliberately risky code paths to prove the checks catch what they claim to.~~
-   Done for the simulation ([note 06](docs/notes/06-breaking-it-on-purpose.md)); render-side
-   float interpolation comes with rendering.
-5. ~~raylib rendering, playable in the browser.~~ Done ([note 07](docs/notes/07-viewer.md)).
-6. ~~Touch controls for the browser page, and a real player instead of random orders.~~ Done ([note 08](docs/notes/08-player.md)).
-7. ~~An opponent worth playing, and a reason to pick one unit over another.~~ Done: the AI and the matchup triangle ([note 09](docs/notes/09-ai-and-matchups.md)).
-8. ~~A second human: two browsers exchanging commands over a relay, with the same replay format as proof.~~ Done ([note 10](docs/notes/10-two-browsers.md)).
-9. ~~Shortest paths, line of sight, one unit per tile, and an AI that focuses, waits for its slow units and kites.~~ Done ([note 11](docs/notes/11-paths-cover-and-bodies.md)).
-10. ~~A benchmark of the step alone, and the first optimisation it pointed at.~~ Done ([note 12](docs/notes/12-benchmark.md)).
-11. ~~Rollback on top of the same frames, so an order lands on the tick it was given instead of three later.~~ Done ([note 13](docs/notes/13-fair-fast-and-rollback.md)).
-12. ~~Fairness: with the same AI on both sides Orange wins more, because lower ids act first within a tick.~~ Done: 496 to 489 now ([note 13](docs/notes/13-fair-fast-and-rollback.md)).
-13. ~~A map with an objective, so a match is more than a brawl.~~ Done: the rule in [note 14](docs/notes/14-objective.md), an AI that plays for it in [note 15](docs/notes/15-playing-the-objective.md), the tempo it lost to the kiting Archer won back in [note 16](docs/notes/16-walking-together.md).
-14. A fourth unit type.
+```
+core/include, core/src   the simulation: world, replay, rollback, net, AI (no sockets, no float state)
+tests/                   doctest suites, one file per area, run by ctest
+tools/                   replay, arena, probe, bench, and the raylib viewer
+docs/notes/              numbered notes, one per rule or step
+docs/media/              the GIF and images used here
+docs/blog/               write-ups
+.github/workflows/       determinism.yml (hash diff across compilers), pages.yml (browser build)
+```
+
+## Limits
+
+- Small on purpose: two players, one 16×16 map, three unit types, one
+  objective. A fourth unit type is the next planned step.
+- The AI is a handful of integer rules with no look-ahead and no retreat. It
+  beats random orders, not a careful human.
+- CI compares the final hash of 1,000 seeds on three targets and verifies one
+  MSVC replay tick by tick in WebAssembly. Other compilers and platforms
+  (gcc on Linux arm64, MSVC x86) are not in CI.
+- The timings come from one laptop and are not run in CI; shared runners are
+  not a stable clock.
+- Online play signals through a public ntfy.sh topic and uses a public STUN
+  server with no TURN fallback, so two browsers behind strict NATs may not
+  connect.
+
+Finished steps and what each one measured are in [`docs/notes`](docs/notes),
+numbered in the order they were done.
 
 ## Contributing
 
@@ -256,4 +271,4 @@ simulation, say so in the commit and expect every replay hash to move.
 
 ## Licence
 
-MIT — see [LICENSE](LICENSE).
+MIT, see [LICENSE](LICENSE).
